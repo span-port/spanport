@@ -1,0 +1,16 @@
+# Local development: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+# Adds server hot reload and exposes the databases on localhost only.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${SPANPORT_POSTGRES_PORT}:5432"
+
+  clickhouse:
+    ports:
+      - "127.0.0.1:${SPANPORT_CLICKHOUSE_PORT}:8123"
+
+  server:
+    environment:
+      SPANPORT_SERVER_RELOAD: "true"
+    volumes:
+      - ./server/src:/app/server/src

@@ -1,0 +1,106 @@
+# The whole stack: docker compose up --build
+# Values come from .env (copy .env.example). docker-compose.dev.yml adds hot reload and database ports.
+name: spanport
+
+# Server and migrate job: settings come from .env, which holds the values for running on your
+# machine (localhost). Inside Docker the databases are other containers, so these few differ.
+x-server-settings: &server-settings
+  env_file: .env
+  environment:
+    SPANPORT_SERVER_HOST: 0.0.0.0
+    SPANPORT_POSTGRES_HOST: postgres
+    SPANPORT_POSTGRES_PORT: 5432
+    SPANPORT_CLICKHOUSE_HOST: clickhouse
+    SPANPORT_CLICKHOUSE_PORT: 8123
+
+services:
+  postgres:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: ${SPANPORT_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${SPANPORT_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${SPANPORT_POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8.35.10
+    environment:
+      CLICKHOUSE_USER: ${SPANPORT_CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${SPANPORT_CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${SPANPORT_CLICKHOUSE_DB}
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Runs once before the server: applies Postgres and ClickHouse migrations, then exits.
+  migrate:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    command: ["python", "-m", "spanport_server.cli", "migrate"]
+    <<: *server-settings
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
+  # Apps send telemetry here (OTLP gRPC 4317, HTTP 4318); it forwards logs to the server.
+  # The image has no shell, so no health check.
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.163.2
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      SPANPORT_SERVER_PORT: ${SPANPORT_SERVER_PORT}
+    volumes:
+      - ./collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "${SPANPORT_COLLECTOR_GRPC_PORT}:4317"
+      - "${SPANPORT_COLLECTOR_HTTP_PORT}:4318"
+    restart: unless-stopped
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    <<: *server-settings
+    ports:
+      - "${SPANPORT_SERVER_PORT}:${SPANPORT_SERVER_PORT}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # The web UI; nginx forwards /api to the server, so the browser talks to one origin.
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    environment:
+      SPANPORT_SERVER_PORT: ${SPANPORT_SERVER_PORT}
+    ports:
+      - "${SPANPORT_UI_PORT}:8080"
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  clickhouse-data:

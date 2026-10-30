@@ -1,0 +1,72 @@
+[project]
+name = "spanport"
+version = "0.1.1"
+description = "Send your Python app's logs to Spanport with two lines of code."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Nitish Bharadwaj", email = "nitishbharadwaj2002@gmail.com" }]
+requires-python = ">=3.12"
+keywords = ["logging", "observability", "opentelemetry", "otlp", "spanport"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: System :: Logging",
+  "Topic :: System :: Monitoring",
+]
+# A published library: ranges so it installs next to any app's own packages.
+# Each lower bound is the vetted version.
+dependencies = [
+  "opentelemetry-exporter-otlp-proto-http>=1.45.1,<2",
+  "opentelemetry-instrumentation-logging>=0.66b1,<1",
+  "opentelemetry-sdk>=1.45.1,<2",
+]
+
+[project.urls]
+Homepage = "https://github.com/span-port/spanport"
+Source = "https://github.com/span-port/spanport"
+Issues = "https://github.com/span-port/spanport/issues"
+
+[dependency-groups]
+dev = [
+  "mypy==2.4.0",
+  "pytest==9.1.1",
+  "ruff==0.17.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv]
+required-version = ">=0.13.1"
+
+# Lint and type-check against the oldest supported Python.
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "UP", "SIM", "S", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["spanport"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+addopts = "--import-mode=importlib --tb=short"
+# Any warning fails the tests, including DeprecationWarning from OpenTelemetry.
+filterwarnings = ["error"]

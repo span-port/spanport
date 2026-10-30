@@ -1,0 +1,76 @@
+# Workspace root: holds the shared lock file, dev tools and their settings.
+# Each app has its own pyproject.toml listed under [tool.uv.workspace].
+
+[tool.uv]
+# A floor, not a pin, so contributors can use any newer uv. Docker builds use exactly 0.13.1.
+required-version = ">=0.13.1"
+
+[tool.uv.workspace]
+members = ["server"]
+# SDKs are separate projects: they support older Pythons and are published on their own.
+exclude = ["sdk/*"]
+
+[dependency-groups]
+dev = [
+  "httpx==0.28.1",
+  "import-linter==2.15",
+  "mypy==2.4.0",
+  "pytest==9.1.1",
+  "ruff==0.17.2",
+]
+
+# Lint and type-check against the oldest supported Python, so newer-only features are caught.
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "UP", "SIM", "S", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["spanport_server"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, and sign in with sample passwords.
+"**/tests/**" = ["S101", "S105", "S106", "S107"]
+
+[tool.mypy]
+strict = true
+python_version = "3.14"
+mypy_path = "server/src:server/tests"
+explicit_package_bases = true
+
+# protobuf ships no type hints; types-protobuf would be another dependency to vet.
+[[tool.mypy.overrides]]
+module = ["google.protobuf.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["server/tests"]
+pythonpath = ["server/src", "server/tests"]
+# Short tracebacks: long ones print library arguments, which can include database passwords.
+addopts = "--import-mode=importlib --tb=short"
+filterwarnings = ["error"]
+
+# Calls only go downward. Layers in parentheses don't exist yet.
+[tool.importlinter]
+root_packages = ["spanport_server"]
+
+[[tool.importlinter.contracts]]
+name = "Server layers"
+type = "layers"
+layers = [
+  "spanport_server.controllers | spanport_server.cli | spanport_server.jobs",
+  "spanport_server.services",
+  "spanport_server.repositories | (spanport_server.clients)",
+  "spanport_server.models | spanport_server.schemas",
+  "spanport_server.core",
+]
+
+# Controllers reach data only through services (wired in dependencies.py).
+[[tool.importlinter.contracts]]
+name = "Controllers don't touch data access"
+type = "forbidden"
+source_modules = ["spanport_server.controllers", "spanport_server.jobs"]
+forbidden_modules = ["spanport_server.repositories", "spanport_server.models"]
+allow_indirect_imports = true

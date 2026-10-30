@@ -1,0 +1,61 @@
+{
+  "name": "spanport",
+  "version": "0.1.1",
+  "description": "Send your Node.js app's logs to Spanport. Keep logging the way you already do.",
+  "keywords": [
+    "logging",
+    "observability",
+    "opentelemetry",
+    "otlp",
+    "spanport"
+  ],
+  "license": "Apache-2.0",
+  "author": "Nitish Bharadwaj <nitishbharadwaj2002@gmail.com>",
+  "homepage": "https://github.com/span-port/spanport",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/span-port/spanport.git",
+    "directory": "sdk/node"
+  },
+  "bugs": "https://github.com/span-port/spanport/issues",
+  "type": "module",
+  "engines": {
+    "node": ">=22.15"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "tsc -p tsconfig.json && node --test --test-reporter=dot \"build/test/**/*.test.js\"",
+    "prepublishOnly": "npm run lint && npm test && npm run build"
+  },
+  "dependencies": {
+    "@opentelemetry/api": ">=1.10.0 <1.11.0",
+    "@opentelemetry/exporter-logs-otlp-http": ">=0.300.0 <0.301.0",
+    "@opentelemetry/resources": ">=3.0.0 <4.0.0",
+    "@opentelemetry/sdk-logs": ">=3.0.0 <4.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@opentelemetry/context-async-hooks": "3.0.0",
+    "@opentelemetry/sdk-trace": "3.0.0",
+    "@types/node": "22.20.5",
+    "eslint": "10.13.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1"
+  },
+  "overrides": {
+    "@types/estree": "1.0.9"
+  }
+}

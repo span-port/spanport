@@ -1,0 +1,46 @@
+# OpenTelemetry Collector: receives OTLP from apps and forwards logs and traces to the server.
+# It never decides who is allowed: it passes each request's Authorization header (the data key)
+# through to the server, which checks it. Batches are kept per key so keys never mix.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        include_metadata: true
+      http:
+        endpoint: 0.0.0.0:4318
+        include_metadata: true
+
+processors:
+  batch:
+    metadata_keys: [authorization]
+    send_batch_size: 1000
+    send_batch_max_size: 1000
+
+extensions:
+  headers_setter:
+    headers:
+      - action: upsert
+        key: authorization
+        from_context: authorization
+
+exporters:
+  otlphttp/server:
+    logs_endpoint: http://server:${env:SPANPORT_SERVER_PORT}/v1/logs
+    traces_endpoint: http://server:${env:SPANPORT_SERVER_PORT}/v1/traces
+    encoding: proto
+    compression: gzip
+    auth:
+      authenticator: headers_setter
+
+service:
+  extensions: [headers_setter]
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/server]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/server]

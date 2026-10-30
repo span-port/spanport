@@ -1,0 +1,94 @@
+/* Design tokens from the PRD's visual design rules and the UI canvas. Screens use only these values. */
+:root {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --color-page: #0f1216;
+  --color-card: #171b21;
+  --color-raised: #1d222a;
+  --color-panel: #141920;
+  --color-border: #2a313b;
+  --color-control-border: #3a424e;
+  --color-divider: #232931;
+  /* Darkens whatever is behind it a little: the see-through box around a log's message */
+  --color-see-through: rgba(0, 0, 0, 0.25);
+  --color-sidebar: #0b0e12;
+  --color-sidebar-border: #1d232b;
+  --color-sidebar-text: #aeb6c2;
+  --color-nav-active: #16302d;
+
+  /* Text */
+  --color-text: #e6e9ee;
+  --color-text-secondary: #9aa4b2;
+  --color-text-muted: #7c8796;
+  --color-text-on-accent: #0b0e11;
+
+  /* Accent and status */
+  --color-accent: #2ba89a;
+  --color-accent-soft: #12302d;
+  --color-link: #5cc8bb;
+  --color-link-hover: #8fddd3;
+  --color-red: #f0705e;
+  --color-amber: #e9a23b;
+  --color-green: #4cc38a;
+  --color-green-soft: #13301f;
+
+  /* Log levels: background, text and message colors */
+  --level-error-bg: #3a1a17;
+  --level-error-fg: #f0705e;
+  --level-error-message: #f7a399;
+  --level-warn-bg: #3a2a12;
+  --level-warn-fg: #f2c27a;
+  --level-info-bg: #12302d;
+  --level-info-fg: #5cc8bb;
+  --level-debug-bg: #232931;
+  --level-debug-fg: #7c8796;
+
+  /* Type scale: base 14 px, ratio about 1.25 */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --font-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  /* Spacing: 4 px grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* Shapes and sizes */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-card: 10px;
+  --radius-dialog: 12px;
+  --control-height: 44px;
+  --control-height-small: 34px;
+  --border-width: 1px;
+  --sidebar-width: 232px;
+  --log-table-min-width: 940px;
+  --log-columns: 150px 64px 150px minmax(0, 1fr) 110px;
+  --log-columns-no-trace: 150px 64px 150px minmax(0, 1fr);
+  /* Request lines: method, path, status, duration inside the message column */
+  --request-columns: 64px minmax(0, 1fr) 48px 72px;
+  --log-details-indent: 210px;
+  --log-scroll-height: 70vh;
+  --dropdown-width: 380px;
+  --dropdown-height: 300px;
+  --dialog-width: 560px;
+  --message-box-height: 360px;
+  --calendar-cell: 36px;
+  /* Room on the right of a message so its text never runs under the Copy button */
+  --message-box-copy-room: 88px;
+  --auth-card-width: 440px;
+  --radius-auth-card: 16px;
+  --shadow-dialog: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
