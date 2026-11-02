@@ -23,6 +23,7 @@ export const RESTORE_SUFFIX = "/restore";
 export const KEYS_PAGE_SIZE = 500;
 export const ALERT_RULES_PATH = "/api/v1/alert-rules";
 export const ALERT_EVENTS_PATH = "/api/v1/alert-events";
+export const ALERT_SETTINGS_PATH = "/api/v1/alert-settings";
 // POST {ALERT_RULES_PATH}/{id}{TEST_SUFFIX}; POST {ALERT_EVENTS_PATH}/{id}{ACKNOWLEDGE_SUFFIX | RESOLVE_SUFFIX}
 export const TEST_SUFFIX = "/test";
 export const ACKNOWLEDGE_SUFFIX = "/acknowledge";
@@ -70,6 +71,7 @@ export const LOG_COUNTS_QUERY_KEY = "log-counts";
 export const ALERT_RULES_QUERY_KEY = "alert-rules";
 export const ALERT_EVENTS_QUERY_KEY = "alert-events";
 export const ALERT_PREVIEW_QUERY_KEY = "alert-preview";
+export const ALERT_SETTINGS_QUERY_KEY = "alert-settings";
 export const USERS_QUERY_KEY = "users";
 export const TRACE_SEARCH_QUERY_KEY = "trace-search";
 export const TRACE_QUERY_KEY = "trace";

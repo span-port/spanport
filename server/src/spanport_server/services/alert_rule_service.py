@@ -5,6 +5,9 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from spanport_server.core.constants import (
+    ALERT_EMAILS_LIMIT_DETAIL,
+    ALERT_RULES_LIMIT_DETAIL,
+    ALERT_WINDOW_LIMIT_DETAIL,
     EMAIL_NOT_SET_UP_DETAIL,
     NO_ALERT_RULE_DETAIL,
     NO_PROJECT_DETAIL,
@@ -12,6 +15,7 @@ from spanport_server.core.constants import (
 from spanport_server.core.errors import DeliveryError, InvalidRequestError, NotFoundError
 from spanport_server.core.ids import UuidV7
 from spanport_server.schemas.alert import (
+    AlertLimits,
     AlertRuleFields,
     AlertRuleItem,
     AlertRuleListResponse,
@@ -37,6 +41,10 @@ class AlertRuleStore(Protocol):
         self, org_id: UuidV7, project_id: UuidV7, after_id: UuidV7 | None, limit: int
     ) -> list[AlertRuleRecord]:
         """Up to `limit` of the project's rules after `after_id`, ordered by id."""
+        ...
+
+    async def count_rules(self, org_id: UuidV7, project_id: UuidV7) -> int:
+        """How many rules the project has."""
         ...
 
     async def find_rule(self, org_id: UuidV7, rule_id: UuidV7) -> AlertRuleRecord | None:
@@ -80,7 +88,11 @@ class AlertRuleService:
     """Owners and admins manage rules; everyone signed in can list them."""
 
     def __init__(
-        self, rules: AlertRuleStore, projects: ProjectFinder, notifier: AlertNotifier
+        self,
+        rules: AlertRuleStore,
+        projects: ProjectFinder,
+        notifier: AlertNotifier,
+        limits: AlertLimits | None = None,
     ) -> None:
         """Create the service.
 
@@ -88,10 +100,19 @@ class AlertRuleService:
             rules: Rule storage (Postgres).
             projects: Project lookups, so a rule only ever belongs to the caller's org.
             notifier: Sends test messages and tells whether email is set up.
+            limits: This server's alert settings; the defaults when None.
         """
         self._rules = rules
         self._projects = projects
         self._notifier = notifier
+        self._limits = limits or AlertLimits()
+
+    def limits(self, caller: Caller) -> AlertLimits:
+        """This server's alert settings, so the UI's form and refresh follow them."""
+        logger.info(
+            "alert settings read %s check_seconds=%d", caller.label, self._limits.check_seconds
+        )
+        return self._limits
 
     async def list_rules(
         self, caller: Caller, project_id: UuidV7, cursor: str | None, limit: int
@@ -115,14 +136,20 @@ class AlertRuleService:
         )
 
     async def create_rule(self, caller: Caller, request: CreateAlertRuleRequest) -> AlertRuleItem:
-        """Add a rule to a project. It is first checked within a minute.
+        """Add a rule to a project. It is first checked in the next round.
 
         Raises:
             NotFoundError: The project isn't in the caller's organization.
-            InvalidRequestError: Bad query, or email isn't set up on this server.
+            InvalidRequestError: Bad query, over this server's limits (window, emails, rules
+                per project), or email isn't set up on this server.
         """
         await self._project(caller, request.project_id)
         self._check_settings(request)
+        rule_count = await self._rules.count_rules(caller.org_id, request.project_id)
+        if rule_count >= self._limits.max_rules_per_project:
+            raise InvalidRequestError(
+                ALERT_RULES_LIMIT_DETAIL.format(limit=self._limits.max_rules_per_project)
+            )
         rule = await self._rules.insert_rule(
             caller.org_id, request.project_id, request, datetime.now(UTC)
         )
@@ -132,7 +159,7 @@ class AlertRuleService:
     async def update_rule(
         self, caller: Caller, rule_id: UuidV7, request: UpdateAlertRuleRequest
     ) -> AlertRuleItem:
-        """Change a rule; it is checked again within a minute.
+        """Change a rule; it is checked again in the next round.
 
         Raises:
             NotFoundError: No such rule in the caller's organization.
@@ -185,7 +212,17 @@ class AlertRuleService:
         )
 
     def _check_settings(self, settings: AlertRuleFields) -> None:
-        """Reject a rule that can't work: a bad query, or no mail server to send with."""
+        """Reject a rule that can't work (a bad query, no mail server to send with) or is over
+        this server's window or email limits.
+        """
+        if settings.window_minutes > self._limits.max_window_minutes:
+            raise InvalidRequestError(
+                ALERT_WINDOW_LIMIT_DETAIL.format(limit=self._limits.max_window_minutes)
+            )
+        if len(settings.email_recipients) > self._limits.max_emails:
+            raise InvalidRequestError(
+                ALERT_EMAILS_LIMIT_DETAIL.format(limit=self._limits.max_emails)
+            )
         parse_query(settings.query)
         if not self._notifier.email_available:
             raise InvalidRequestError(EMAIL_NOT_SET_UP_DETAIL)

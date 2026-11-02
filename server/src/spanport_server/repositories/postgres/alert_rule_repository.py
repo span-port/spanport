@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from spanport_server.core.ids import UuidV7, new_id
@@ -80,6 +80,14 @@ class AlertRuleRepository:
             query = query.where(AlertRule.id > after_id)
         async with self._sessionmaker() as session:
             return [to_rule_record(row) for row in await session.execute(query)]
+
+    async def count_rules(self, org_id: UuidV7, project_id: UuidV7) -> int:
+        """How many rules the project has."""
+        query = select(func.count()).where(
+            AlertRule.org_id == org_id, AlertRule.project_id == project_id
+        )
+        async with self._sessionmaker() as session:
+            return (await session.execute(query)).scalar_one()
 
     async def find_rule(self, org_id: UuidV7, rule_id: UuidV7) -> AlertRuleRecord | None:
         """One rule of this organization, or None."""

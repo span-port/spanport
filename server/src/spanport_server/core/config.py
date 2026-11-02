@@ -7,9 +7,22 @@ from pydantic import Field, SecretStr, ValidationError, field_validator, model_v
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from spanport_server.core.constants import (
+    ALERT_EMAILS_CEILING,
+    ALERT_RULES_CEILING,
+    ALERT_WINDOW_CEILING_MINUTES,
+    DEFAULT_ALERT_CHECK_SECONDS,
+    DEFAULT_ALERT_MAX_EMAILS,
+    DEFAULT_ALERT_MAX_RULES_PER_PROJECT,
+    DEFAULT_ALERT_MAX_WINDOW_MINUTES,
     DEFAULT_LOG_LEVEL,
+    DEFAULT_LOGIN_FAILURE_LIMIT,
+    DEFAULT_LOGIN_FAILURE_WINDOW_MINUTES,
     DEFAULT_SMTP_PORT,
     ENV_PREFIX,
+    MAX_ALERT_CHECK_SECONDS,
+    MAX_LOGIN_FAILURE_LIMIT,
+    MAX_LOGIN_FAILURE_WINDOW_MINUTES,
+    MIN_ALERT_CHECK_SECONDS,
     UI_URL_DETAIL,
     UI_URL_SCHEMES,
 )
@@ -56,6 +69,24 @@ class Settings(DatabaseSettings):
     # Where people open the UI, e.g. https://spanport.acme.com. Used only for links in alert
     # emails; without it, emails have no buttons.
     ui_url: str | None = None
+
+    # Log alerts: how often rules are checked and what a rule may hold.
+    alert_check_seconds: int = Field(
+        DEFAULT_ALERT_CHECK_SECONDS, ge=MIN_ALERT_CHECK_SECONDS, le=MAX_ALERT_CHECK_SECONDS
+    )
+    alert_max_emails: int = Field(DEFAULT_ALERT_MAX_EMAILS, ge=1, le=ALERT_EMAILS_CEILING)
+    alert_max_window_minutes: int = Field(
+        DEFAULT_ALERT_MAX_WINDOW_MINUTES, ge=1, le=ALERT_WINDOW_CEILING_MINUTES
+    )
+    alert_max_rules_per_project: int = Field(
+        DEFAULT_ALERT_MAX_RULES_PER_PROJECT, ge=1, le=ALERT_RULES_CEILING
+    )
+
+    # Sign-in rate limit per email: this many wrong passwords within the window locks it.
+    login_failure_limit: int = Field(DEFAULT_LOGIN_FAILURE_LIMIT, ge=1, le=MAX_LOGIN_FAILURE_LIMIT)
+    login_failure_window_minutes: int = Field(
+        DEFAULT_LOGIN_FAILURE_WINDOW_MINUTES, ge=1, le=MAX_LOGIN_FAILURE_WINDOW_MINUTES
+    )
 
     @model_validator(mode="after")
     def check_smtp_from(self) -> Settings:

@@ -3,8 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { ALERT_PREVIEW_QUERY_KEY } from "../../../constants/api";
-import { MAX_ALERT_WINDOW_MINUTES, MS_PER_MINUTE, PREVIEW_DEBOUNCE_MS } from "../../../constants/alerts";
+import { MS_PER_MINUTE, PREVIEW_DEBOUNCE_MS } from "../../../constants/alerts";
 import { countLogs } from "../../logs/api";
+import { useAlertLimits } from "./useAlerts";
 
 /**
  * Count the project's lines matching `query` in the last `windowMinutes`, once typing pauses.
@@ -12,6 +13,7 @@ import { countLogs } from "../../logs/api";
  * @returns The query result: `data.total`, or an ApiError (e.g. 400 for a search that isn't valid yet).
  */
 export function useRulePreview(projectId: string, query: string, windowMinutes: number) {
+  const { max_window_minutes } = useAlertLimits();
   const [settled, setSettled] = useState({ query, windowMinutes });
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -24,7 +26,7 @@ export function useRulePreview(projectId: string, query: string, windowMinutes: 
   const windowValid =
     Number.isInteger(settled.windowMinutes) &&
     settled.windowMinutes >= 1 &&
-    settled.windowMinutes <= MAX_ALERT_WINDOW_MINUTES;
+    settled.windowMinutes <= max_window_minutes;
   return useQuery({
     queryKey: [ALERT_PREVIEW_QUERY_KEY, projectId, settled.query, settled.windowMinutes],
     enabled: windowValid,

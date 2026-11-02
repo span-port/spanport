@@ -1,6 +1,6 @@
 import { Button } from "../../../components/ui/Button";
 import { ErrorBanner } from "../../../components/ui/ErrorBanner";
-import { ALERT_SEARCH_PRESETS, MAX_ALERT_EMAILS, MAX_ALERT_WINDOW_MINUTES } from "../../../constants/alerts";
+import { ALERT_SEARCH_PRESETS } from "../../../constants/alerts";
 import { previewText, thresholdExplained } from "../../../lib/alerts";
 import type { AlertRule } from "../api";
 import { useAlertRuleForm } from "../hooks/useAlertRuleForm";
@@ -95,7 +95,7 @@ export function RuleForm({ projectId, editing, startQuery, onDone }: RuleFormPro
           className="input input-amount"
           type="number"
           min={1}
-          max={MAX_ALERT_WINDOW_MINUTES}
+          max={form.limits.max_window_minutes}
           aria-label="Minutes"
           {...form.register("windowMinutes", { valueAsNumber: true })}
         />
@@ -104,7 +104,7 @@ export function RuleForm({ projectId, editing, startQuery, onDone }: RuleFormPro
       <p className="text-muted text-xs">{thresholdExplained(form.watched.threshold, form.watched.windowMinutes)}</p>
       <RulePreview projectId={projectId} {...form.watched} />
       <label className="field">
-        <span className="field-label">Email (up to {MAX_ALERT_EMAILS}, separated by commas or new lines)</span>
+        <span className="field-label">Email (up to {form.limits.max_emails}, separated by commas or new lines)</span>
         <textarea className="input" rows={2} placeholder="oncall@yourco.com" {...form.register("emails")} />
       </label>
       <p className="text-muted text-xs">

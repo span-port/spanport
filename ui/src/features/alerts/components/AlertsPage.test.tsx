@@ -24,6 +24,9 @@ const FIRING: AlertEvent = {
   resolved_by: null,
 };
 
+// A server configured below the defaults, so the form shows it follows the server.
+const SERVER_LIMITS = { check_seconds: 10, max_emails: 3, max_window_minutes: 30, max_rules_per_project: 50 };
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
@@ -38,6 +41,7 @@ function server(role: string, events: AlertEvent[] = []) {
     }
     if (path.startsWith("/api/v1/projects")) return Promise.resolve(page([PROJECT]));
     if (path === "/api/v1/logs/counts") return Promise.resolve(json({ total: 37, by_level: { ERROR: 37 } }));
+    if (path === "/api/v1/alert-settings") return Promise.resolve(json(SERVER_LIMITS));
     if (path.startsWith("/api/v1/alert-events") && init.method !== "POST") return Promise.resolve(page(events));
     if (init.method === "POST" && path === "/api/v1/alert-rules") return Promise.resolve(json({}, 201));
     if (init.method === "POST") return Promise.resolve(new Response(null, { status: 204 }));
@@ -79,7 +83,8 @@ describe("Alerts", () => {
     expect(screen.getByLabelText("Search")).toHaveProperty("value", "level:ERROR OR level:WARN");
     await userEvent.click(screen.getByRole("button", { name: "Errors" }));
     await userEvent.type(screen.getByLabelText("Name"), "Too many errors");
-    const emails = screen.getByLabelText(/^Email/);
+    const emails = await screen.findByLabelText(/^Email \(up to 3,/);
+    expect(screen.getByLabelText("Minutes")).toHaveProperty("max", "30");
     await userEvent.type(emails, "oncall@yourco.com, oncall@yourco");
     await userEvent.click(screen.getByRole("button", { name: "Save rule" }));
 

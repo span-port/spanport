@@ -135,5 +135,20 @@ async def test_alerts_need_a_session(browser: Browser) -> None:
     response = await browser.client.get(
         "/api/v1/alert-events", params={"project_id": browser.project_id}
     )
+    settings = await browser.client.get("/api/v1/alert-settings")
 
     assert response.status_code == 401
+    assert settings.status_code == 401
+
+
+async def test_anyone_signed_in_reads_the_alert_settings(browser: Browser) -> None:
+    await browser.sign_in("viewer@example.com")
+
+    response = await browser.client.get("/api/v1/alert-settings")
+
+    assert response.json() == {
+        "check_seconds": 10,
+        "max_emails": 10,
+        "max_window_minutes": 60,
+        "max_rules_per_project": 50,
+    }

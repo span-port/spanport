@@ -1,11 +1,14 @@
 """Sign-in requests and responses, and who is calling an endpoint."""
 
 from dataclasses import dataclass
+from datetime import timedelta
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from spanport_server.core.constants import (
+    DEFAULT_LOGIN_FAILURE_LIMIT,
+    DEFAULT_LOGIN_FAILURE_WINDOW_MINUTES,
     EMAIL_PATTERN,
     MAX_EMAIL_LENGTH,
     MAX_NAME_LENGTH,
@@ -36,6 +39,16 @@ class UserRecord:
     role: Role
     # The projects a member or viewer may see; None means every project of the org.
     project_ids: frozenset[UuidV7] | None = None
+
+
+@dataclass(frozen=True)
+class LoginLimit:
+    """Sign-in rate limit per email (SPANPORT_LOGIN_FAILURE_*): `failures` wrong passwords
+    within `window` lock that email until the oldest of them leaves the window.
+    """
+
+    failures: int = DEFAULT_LOGIN_FAILURE_LIMIT
+    window: timedelta = timedelta(minutes=DEFAULT_LOGIN_FAILURE_WINDOW_MINUTES)
 
 
 @dataclass(frozen=True)

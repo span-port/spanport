@@ -5,7 +5,7 @@ from fakes import FakeSessionStore, FakeUserStore
 
 from spanport_server.core.errors import InvalidLoginError, RateLimitedError
 from spanport_server.core.passwords import hash_password
-from spanport_server.schemas.auth import LoginRequest, Role
+from spanport_server.schemas.auth import LoginLimit, LoginRequest, Role
 from spanport_server.services.auth_service import AuthService
 
 pytestmark = pytest.mark.anyio
@@ -68,3 +68,19 @@ async def test_unknown_emails_are_limited_too_and_other_emails_are_not(setup: Se
     with pytest.raises(RateLimitedError):
         await setup.auth.login(LoginRequest(email="nobody@example.com", password=PASSWORD))
     await setup.right()
+
+
+async def test_the_limit_and_window_come_from_settings(setup: Setup) -> None:
+    setup.auth = AuthService(
+        setup.users,
+        FakeSessionStore(),
+        lambda: setup.now,
+        LoginLimit(failures=2, window=timedelta(minutes=5)),
+    )
+    await setup.wrong(2)
+
+    with pytest.raises(RateLimitedError) as locked:
+        await setup.right()
+
+    # Failures at 12:00 and 12:01; the first leaves the 5-minute window at 12:05, it is now 12:02.
+    assert locked.value.retry_after_seconds == 3 * 60

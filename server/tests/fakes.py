@@ -648,6 +648,9 @@ class FakeAlertRuleStore:
         )
         return [r for r in found if after_id is None or r.id > after_id][:limit]
 
+    async def count_rules(self, org_id: UuidV7, project_id: UuidV7) -> int:
+        return sum((r.org_id, r.project_id) == (org_id, project_id) for r in self.rules.values())
+
     async def find_rule(self, org_id: UuidV7, rule_id: UuidV7) -> AlertRuleRecord | None:
         rule = self.rules.get(rule_id)
         return rule if rule and rule.org_id == org_id else None

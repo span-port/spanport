@@ -4,6 +4,7 @@ import {
   ACKNOWLEDGE_SUFFIX,
   ALERT_EVENTS_PATH,
   ALERT_RULES_PATH,
+  ALERT_SETTINGS_PATH,
   ALERTS_PAGE_SIZE,
   RESOLVE_SUFFIX,
   TEST_SUFFIX,
@@ -44,6 +45,14 @@ export interface AlertEvent {
   resolved_by: string | null;
 }
 
+/** This server's alert settings (SPANPORT_ALERT_*): how often rules are checked and their limits. */
+export interface AlertLimits {
+  check_seconds: number;
+  max_emails: number;
+  max_window_minutes: number;
+  max_rules_per_project: number;
+}
+
 interface Page<Item> {
   data: Item[];
   next_cursor: string | null;
@@ -54,6 +63,11 @@ const projectQuery = (projectId: string) =>
   `?project_id=${encodeURIComponent(projectId)}&limit=${String(ALERTS_PAGE_SIZE)}`;
 const rulePath = (ruleId: string) => `${ALERT_RULES_PATH}/${encodeURIComponent(ruleId)}`;
 const eventPath = (eventId: string) => `${ALERT_EVENTS_PATH}/${encodeURIComponent(eventId)}`;
+
+/** This server's alert check interval and rule limits. */
+export function fetchAlertLimits(signal: AbortSignal): Promise<AlertLimits> {
+  return apiJson<AlertLimits>(ALERT_SETTINGS_PATH, { signal });
+}
 
 /** A project's rules, oldest first. */
 export function fetchRules(projectId: string, signal: AbortSignal): Promise<Page<AlertRule>> {

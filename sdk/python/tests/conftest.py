@@ -19,6 +19,7 @@ class ReceivedRequest:
     path: str
     authorization: str | None
     body: bytes
+    traceparent: str | None = None
 
 
 class FakeSpanport:
@@ -43,7 +44,11 @@ class FakeSpanport:
 
             def _received(self, body: bytes) -> ReceivedRequest:
                 return ReceivedRequest(
-                    self.command, self.path, self.headers.get("Authorization"), body
+                    self.command,
+                    self.path,
+                    self.headers.get("Authorization"),
+                    body,
+                    self.headers.get("traceparent"),
                 )
 
             def log_message(self, format: str, *args: object) -> None:

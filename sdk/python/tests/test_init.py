@@ -27,8 +27,8 @@ def test_logs_reach_the_collector_with_the_data_key(
     logging.getLogger("app").error("Payment failed for order 1042")
     spanport.shutdown()
 
-    [log_post] = [request for request in fake_spanport.requests if request.method == "POST"]
-    assert log_post.path == "/v1/logs"
+    [log_post] = [request for request in fake_spanport.requests if request.path == "/v1/logs"]
+    assert log_post.method == "POST"
     assert log_post.authorization == f"Bearer {VALID_KEY}"
     sent = ExportLogsServiceRequest.FromString(log_post.body)
     [record] = sent.resource_logs[0].scope_logs[0].log_records

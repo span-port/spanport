@@ -4,6 +4,23 @@ DATA_KEY_PREFIX = "sp_ingest_"
 DEFAULT_COLLECTOR_URL = "http://localhost:4318"
 DEFAULT_SERVER_URL = "http://localhost:8000"
 OTLP_LOGS_PATH = "/v1/logs"
+OTLP_TRACES_PATH = "/v1/traces"
+
+# Instrumentations switched on only when installed (they patch libraries the SDK doesn't depend
+# on). Each pair is (module, instrumentor class); `pip install spanport[<name>]` installs one.
+OPTIONAL_INSTRUMENTATIONS = (
+    ("opentelemetry.instrumentation.fastapi", "FastAPIInstrumentor"),
+    ("opentelemetry.instrumentation.flask", "FlaskInstrumentor"),
+    ("opentelemetry.instrumentation.django", "DjangoInstrumentor"),
+    ("opentelemetry.instrumentation.sqlalchemy", "SQLAlchemyInstrumentor"),
+    ("opentelemetry.instrumentation.psycopg", "PsycopgInstrumentor"),
+    ("opentelemetry.instrumentation.httpx", "HTTPXClientInstrumentor"),
+    ("opentelemetry.instrumentation.requests", "RequestsInstrumentor"),
+)
+# Separates a decorated class's name from its method in span names, e.g. "UsersService.find".
+SPAN_NAME_SEPARATOR = "."
+# Instrumentation scope of the steps the SDK records itself (span() and @trace()).
+SDK_SCOPE_NAME = "spanport"
 CURRENT_API_KEY_PATH = "/api/v1/api-keys/current"
 AUTHORIZATION_HEADER = "Authorization"
 BEARER_PREFIX = "Bearer "

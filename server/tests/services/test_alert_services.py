@@ -10,6 +10,7 @@ from fakes import (
     caller_for,
 )
 
+from spanport_server.core.constants import ALERT_CHECK_OVERLAP
 from spanport_server.core.errors import (
     DeliveryError,
     InvalidRequestError,
@@ -17,7 +18,7 @@ from spanport_server.core.errors import (
     NotSignedInError,
 )
 from spanport_server.core.ids import new_id
-from spanport_server.schemas.alert import AlertState, CreateAlertRuleRequest
+from spanport_server.schemas.alert import AlertLimits, AlertState, CreateAlertRuleRequest
 from spanport_server.schemas.auth import Caller
 from spanport_server.schemas.tenant import ProjectRef
 from spanport_server.services.alert_check_service import AlertCheckService
@@ -27,7 +28,9 @@ from spanport_server.services.alert_rule_service import AlertRuleService
 
 pytestmark = pytest.mark.anyio
 
-NOW = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
+# Ahead of the real clock for the whole test run: new rules are first due at the real now,
+# so a check at NOW finds them.
+NOW = datetime.now(UTC) + timedelta(hours=1)
 
 
 class Setup:
@@ -84,6 +87,41 @@ async def test_create_rule_needs_a_mail_server(setup: Setup) -> None:
         await no_email.create_rule(setup.caller, setup.rule_request())
 
 
+async def test_create_rule_keeps_to_the_server_limits(setup: Setup) -> None:
+    limits = AlertLimits(max_emails=2, max_window_minutes=10, max_rules_per_project=1)
+    limited = AlertRuleService(setup.rules, setup.tenants, AlertNotifier(setup.email), limits)
+
+    with pytest.raises(InvalidRequestError, match="1 to 10 minutes"):
+        await limited.create_rule(setup.caller, setup.rule_request(window_minutes=11))
+    with pytest.raises(InvalidRequestError, match="1 to 2 addresses"):
+        await limited.create_rule(
+            setup.caller,
+            setup.rule_request(email_recipients=["a@example.com", "b@example.com", "c@x.com"]),
+        )
+    await limited.create_rule(setup.caller, setup.rule_request(window_minutes=10))
+    with pytest.raises(InvalidRequestError, match="already has 1 alert rules"):
+        await limited.create_rule(setup.caller, setup.rule_request())
+    assert limited.limits(setup.caller) == limits
+
+
+async def test_the_next_check_follows_the_configured_interval(setup: Setup) -> None:
+    checks = AlertCheckService(
+        setup.rules,
+        setup.alerts,
+        setup.logs,
+        setup.tenants,
+        AlertNotifier(setup.email),
+        timedelta(seconds=30),
+    )
+    await setup.rule_service.create_rule(setup.caller, setup.rule_request())
+
+    await checks.check_due_rules(NOW)
+
+    assert checks.check_interval == timedelta(seconds=30)
+    assert await checks.check_due_rules(NOW + timedelta(seconds=20)) == 0
+    assert await checks.check_due_rules(NOW + timedelta(seconds=30)) == 1
+
+
 async def test_send_test_emails_the_recipients_and_reports_a_refusal(setup: Setup) -> None:
     rule = await setup.rule_service.create_rule(setup.caller, setup.rule_request())
 
@@ -129,16 +167,25 @@ async def test_check_counts_the_rule_window_in_the_rule_project(setup: Setup) ->
 
     query = setup.logs.queries[0][0]
     assert (query.org_id, query.project_id) == (setup.project.org_id, setup.project.project_id)
-    assert query.end - query.start == timedelta(minutes=15)
+    assert query.end - query.start == timedelta(minutes=15) + ALERT_CHECK_OVERLAP
 
 
-async def test_a_rule_is_not_checked_again_before_the_next_minute(setup: Setup) -> None:
+async def test_a_rule_is_not_checked_again_before_the_next_round(setup: Setup) -> None:
     await setup.rule_service.create_rule(setup.caller, setup.rule_request())
 
     first = await setup.check_with(matched=0)
-    second = await setup.check_with(matched=0, at=NOW + timedelta(seconds=30))
+    second = await setup.check_with(matched=0, at=NOW + timedelta(seconds=5))
 
     assert (first, second) == (1, 0)
+
+
+async def test_a_round_that_wakes_slightly_early_still_checks_the_rule(setup: Setup) -> None:
+    await setup.rule_service.create_rule(setup.caller, setup.rule_request())
+
+    await setup.check_with(matched=0)
+    early_round = await setup.check_with(matched=0, at=NOW + timedelta(seconds=9.9))
+
+    assert early_round == 1
 
 
 async def test_storage_down_skips_the_check_and_changes_nothing(setup: Setup) -> None:

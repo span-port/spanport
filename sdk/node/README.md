@@ -1,6 +1,6 @@
 # spanport (Node.js SDK)
 
-Send your Node.js app's logs to Spanport. Keep logging the way you already do.
+Send your Node.js app's logs, and where each request spends its time, to Spanport. Keep logging the way you already do.
 
 ```bash
 npm install spanport
@@ -49,11 +49,41 @@ Node.js 22.15 or newer. ES module; CommonJS apps can `require("spanport")`.
 At start-up the SDK prints, on stderr:
 
 ```
-INFO spanport: sending logs for service orders-api to http://localhost:4318
+INFO spanport: sending logs and traces for service orders-api to http://localhost:4318
 INFO spanport: data key ...a1b2 accepted
 ```
 
 If the second line is missing or says something else, see [Troubleshooting](#troubleshooting).
+
+## Request timing (traces)
+
+`init()` also times each request your app handles and every step inside it, and sends them as traces; open **Requests** in Spanport to see them as a waterfall (request → controller → service → database / outgoing calls). Pass `traces: false` to send logs only.
+
+- **Always on:** incoming HTTP requests and outgoing `http`/`https` calls. Outgoing calls carry a W3C `traceparent` header, so your other services running the SDK join the same trace (shown as a service call).
+- **If your app has them installed**, also: route names for Express and NestJS (`npm install @opentelemetry/instrumentation-express`), Postgres queries (`@opentelemetry/instrumentation-pg`) and `fetch` calls (`@opentelemetry/instrumentation-undici`). On start-up the SDK says which it found: `spanport: also timing: ...`.
+- **Call `init()` before your framework loads**, from a small file imported first, so Express and Postgres get timed:
+
+```ts
+// src/spanport.ts
+import * as spanport from "spanport";
+spanport.init({ dataKey: process.env.SPANPORT_DATA_KEY ?? "", service: "kosha-backend" });
+
+// src/main.ts: the very first import
+import "./spanport";
+import { NestFactory } from "@nestjs/core";
+```
+
+**Your own code**: time every method of a controller or service, or any block:
+
+```ts
+@spanport.trace()        // "VariablesService.list", "VariablesService.find", ...
+@Injectable()
+export class VariablesService { ... }
+
+const prompt = await spanport.withSpan("build prompt", () => render(template, data));
+```
+
+Works with NestJS decorators (route paths and guards keep working) and with sync or async methods. A thrown error marks the step failed and is rethrown unchanged. Logs written during a step carry its trace, so **See logs** on a request in Spanport shows them.
 
 ## What Spanport receives
 

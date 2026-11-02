@@ -1,15 +1,15 @@
 [project]
 name = "spanport"
-version = "0.1.1"
-description = "Send your Python app's logs to Spanport with two lines of code."
+version = "1.0.0"
+description = "Send your Python app's logs and request traces to Spanport with two lines of code."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Nitish Bharadwaj", email = "nitishbharadwaj2002@gmail.com" }]
 requires-python = ">=3.12"
-keywords = ["logging", "observability", "opentelemetry", "otlp", "spanport"]
+keywords = ["logging", "tracing", "observability", "opentelemetry", "otlp", "spanport"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Developers",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
@@ -27,14 +27,29 @@ dependencies = [
   "opentelemetry-sdk>=1.45.1,<2",
 ]
 
+# Request timing for a library, switched on by init() when installed:
+# pip install "spanport[fastapi]" (or [all]). Each lower bound is the vetted version.
+[project.optional-dependencies]
+fastapi = ["opentelemetry-instrumentation-fastapi>=0.66b2,<1"]
+flask = ["opentelemetry-instrumentation-flask>=0.66b2,<1"]
+django = ["opentelemetry-instrumentation-django>=0.66b2,<1"]
+sqlalchemy = ["opentelemetry-instrumentation-sqlalchemy>=0.66b2,<1"]
+psycopg = ["opentelemetry-instrumentation-psycopg>=0.66b2,<1"]
+httpx = ["opentelemetry-instrumentation-httpx>=0.66b2,<1"]
+requests = ["opentelemetry-instrumentation-requests>=0.66b2,<1"]
+all = ["spanport[fastapi,flask,django,sqlalchemy,psycopg,httpx,requests]"]
+
 [project.urls]
 Homepage = "https://github.com/span-port/spanport"
-Source = "https://github.com/span-port/spanport"
+# The exact source of this release.
+Source = "https://github.com/span-port/spanport/tree/sdk-python-v1.0.0/sdk/python"
+Release = "https://github.com/span-port/spanport/releases/tag/sdk-python-v1.0.0"
 Issues = "https://github.com/span-port/spanport/issues"
 
 [dependency-groups]
 dev = [
   "mypy==2.4.0",
+  "opentelemetry-instrumentation-requests==0.66b2",
   "pytest==9.1.1",
   "ruff==0.17.2",
 ]

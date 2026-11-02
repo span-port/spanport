@@ -1,5 +1,5 @@
 /**
- * Spanport SDK: send your Node.js app's logs to Spanport.
+ * Spanport SDK: send your Node.js app's logs and traces (request timings) to Spanport.
  *
  *     import * as spanport from "spanport";
  *     spanport.init({ dataKey: "sp_ingest_...", service: "orders-api" });
@@ -27,6 +27,7 @@ import { createLogStream } from "./logStream.js";
 import { buildLoggerProvider, buildOtlpExporter, toLogRecord } from "./pipeline.js";
 import { sdkError, sdkInfo, sdkWarning } from "./sdkMessages.js";
 import { consoleSeverity } from "./severity.js";
+import { type ActiveTracing, buildTraceExporter, startTracing } from "./tracing.js";
 import { isHttpUrl } from "./urls.js";
 
 export interface SpanportOptions {
@@ -42,13 +43,18 @@ export interface SpanportOptions {
   checkKey?: boolean;
   /** Set false to stop copying console.* calls to Spanport. Default true. */
   captureConsole?: boolean;
+  /** Set false to send no traces (request timings). Default true. */
+  traces?: boolean;
 }
 
 interface ActivePipeline {
   provider: LoggerProvider;
   logger: Logger;
   restoreConsole: (() => void) | undefined;
+  tracing: ActiveTracing | undefined;
 }
+
+export { trace, withSpan } from "./spans.js";
 
 let active: ActivePipeline | undefined;
 let exitFlushInstalled = false;
@@ -76,7 +82,7 @@ export async function shutdown(): Promise<void> {
   if (!pipeline) return;
   pipeline.restoreConsole?.();
   try {
-    await pipeline.provider.shutdown();
+    await Promise.all([pipeline.provider.shutdown(), pipeline.tracing?.stop()]);
   } catch (error) {
     sdkWarning(`shutdown failed; some queued logs may not have been sent: ${describe(error)}`);
   }
@@ -124,11 +130,20 @@ function start(options: SpanportOptions): void {
             ),
           );
         });
-  active = { provider, logger, restoreConsole };
+  const serverUrl = options.serverUrl ?? DEFAULT_SERVER_URL;
+  const tracing =
+    options.traces === false
+      ? undefined
+      : startTracing(options.service, buildTraceExporter(collectorUrl, options.dataKey), {
+          collectorUrl,
+          serverUrl: isHttpUrl(serverUrl) ? serverUrl : collectorUrl,
+        });
+  active = { provider, logger, restoreConsole, tracing };
   installExitFlush();
-  sdkInfo(`sending logs for service ${options.service} to ${collectorUrl}`);
+  sdkInfo(`sending logs${tracing ? " and traces" : ""} for service ${options.service} to ${collectorUrl}`);
+  if (tracing?.optional.length) sdkInfo(`also timing: ${tracing.optional.join(", ")}`);
   if (options.checkKey !== false) {
-    void checkDataKey(options.serverUrl ?? DEFAULT_SERVER_URL, options.dataKey);
+    void checkDataKey(serverUrl, options.dataKey);
   }
 }
 

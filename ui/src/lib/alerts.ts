@@ -69,6 +69,16 @@ export function parseEmailList(text: string): string[] {
   return [...new Set(addresses)];
 }
 
+/** The form's message for a window outside 1 to `maxMinutes` (the server's limit). */
+export function windowMessage(maxMinutes: number): string {
+  return `Enter 1 to ${String(maxMinutes)} minutes.`;
+}
+
+/** The form's message for too few or too many addresses (the server allows up to `maxEmails`). */
+export function emailsMessage(maxEmails: number): string {
+  return `Add 1 to ${String(maxEmails)} email addresses.`;
+}
+
 /** Owners and admins add, change and delete rules. */
 export function canManageAlertRules(role: CurrentUser["role"] | undefined): boolean {
   return isManager(role);

@@ -5,7 +5,12 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from spanport_server.core.constants import ALERT_CHECK_BATCH, ALERT_CHECK_INTERVAL
+from spanport_server.core.constants import (
+    ALERT_CHECK_BATCH,
+    ALERT_CHECK_EARLY,
+    ALERT_CHECK_OVERLAP,
+    DEFAULT_ALERT_CHECK_SECONDS,
+)
 from spanport_server.core.errors import DeliveryError, InvalidRequestError, StorageUnavailableError
 from spanport_server.core.ids import UuidV7
 from spanport_server.schemas.alert import AlertRuleRecord, OpenAlert
@@ -78,6 +83,7 @@ class AlertCheckService:
         logs: LogCounter,
         projects: ProjectFinder,
         notifier: AlertNotifier,
+        check_interval: timedelta = timedelta(seconds=DEFAULT_ALERT_CHECK_SECONDS),
     ) -> None:
         """Create the service.
 
@@ -87,12 +93,14 @@ class AlertCheckService:
             logs: Log counts (ClickHouse).
             projects: Project names for the emails.
             notifier: Sends the emails.
+            check_interval: How often the job runs a round (SPANPORT_ALERT_CHECK_SECONDS).
         """
         self._rules = rules
         self._alerts = alerts
         self._logs = logs
         self._projects = projects
         self._notifier = notifier
+        self.check_interval = check_interval
 
     async def check_due_rules(self, now: datetime) -> int:
         """Check every rule that is due, one organization at a time.
@@ -106,7 +114,7 @@ class AlertCheckService:
         checked = 0
         for org_id in await self._rules.list_org_ids():
             due = await self._rules.claim_due_rules(
-                org_id, now, now + ALERT_CHECK_INTERVAL, ALERT_CHECK_BATCH
+                org_id, now, now + self.check_interval - ALERT_CHECK_EARLY, ALERT_CHECK_BATCH
             )
             for rule in due:
                 checked += await self._check_rule(rule, now)
@@ -136,11 +144,11 @@ class AlertCheckService:
         return 1
 
     async def _count(self, rule: AlertRuleRecord, now: datetime) -> int:
-        """Matching log lines in the rule's window up to now."""
+        """Matching log lines in the rule's window up to now, plus the overlap for late lines."""
         query = LogQuery(
             org_id=rule.org_id,
             project_id=rule.project_id,
-            start=now - timedelta(minutes=rule.window_minutes),
+            start=now - timedelta(minutes=rule.window_minutes) - ALERT_CHECK_OVERLAP,
             end=now,
             condition=parse_query(rule.query),
         )

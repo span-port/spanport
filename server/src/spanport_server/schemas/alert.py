@@ -8,11 +8,15 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
 
 from spanport_server.core.constants import (
+    ALERT_EMAILS_CEILING,
+    ALERT_WINDOW_CEILING_MINUTES,
+    DEFAULT_ALERT_CHECK_SECONDS,
+    DEFAULT_ALERT_MAX_EMAILS,
+    DEFAULT_ALERT_MAX_RULES_PER_PROJECT,
+    DEFAULT_ALERT_MAX_WINDOW_MINUTES,
     EMAIL_PATTERN,
-    MAX_ALERT_EMAILS,
     MAX_ALERT_NAME_LENGTH,
     MAX_ALERT_THRESHOLD,
-    MAX_ALERT_WINDOW_MINUTES,
     MAX_EMAIL_LENGTH,
     MAX_QUERY_LENGTH,
 )
@@ -37,9 +41,19 @@ class AlertRuleFields(BaseModel):
     name: str = Field(min_length=1, max_length=MAX_ALERT_NAME_LENGTH)
     query: str = Field(default="", max_length=MAX_QUERY_LENGTH)
     threshold: int = Field(ge=0, le=MAX_ALERT_THRESHOLD)
-    window_minutes: int = Field(ge=1, le=MAX_ALERT_WINDOW_MINUTES)
-    email_recipients: list[EmailAddress] = Field(min_length=1, max_length=MAX_ALERT_EMAILS)
+    # The ceilings only bound the body; the server's own limits (AlertLimits) are checked after.
+    window_minutes: int = Field(ge=1, le=ALERT_WINDOW_CEILING_MINUTES)
+    email_recipients: list[EmailAddress] = Field(min_length=1, max_length=ALERT_EMAILS_CEILING)
     enabled: bool = True
+
+
+class AlertLimits(BaseModel):
+    """This server's alert settings (SPANPORT_ALERT_*), also sent to the UI for its form."""
+
+    check_seconds: int = DEFAULT_ALERT_CHECK_SECONDS
+    max_emails: int = DEFAULT_ALERT_MAX_EMAILS
+    max_window_minutes: int = DEFAULT_ALERT_MAX_WINDOW_MINUTES
+    max_rules_per_project: int = DEFAULT_ALERT_MAX_RULES_PER_PROJECT
 
 
 class CreateAlertRuleRequest(AlertRuleFields):

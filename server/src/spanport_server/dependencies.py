@@ -1,6 +1,7 @@
 """Wires repositories into services for each request (FastAPI Depends)."""
 
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from typing import Annotated
 
 from clickhouse_connect.driver.asyncclient import AsyncClient
@@ -32,8 +33,9 @@ from spanport_server.repositories.postgres.session_repository import SessionRepo
 from spanport_server.repositories.postgres.team_repository import TeamRepository
 from spanport_server.repositories.postgres.tenant_repository import TenantRepository
 from spanport_server.repositories.postgres.user_repository import UserRepository
+from spanport_server.schemas.alert import AlertLimits
 from spanport_server.schemas.api_key import ApiKeyRecord, KeyType, Scope
-from spanport_server.schemas.auth import Caller, UserRecord
+from spanport_server.schemas.auth import Caller, LoginLimit, UserRecord
 from spanport_server.services.alert_check_service import AlertCheckService
 from spanport_server.services.alert_event_service import AlertEventService
 from spanport_server.services.alert_notifier import AlertNotifier
@@ -62,10 +64,32 @@ def get_api_key_service(request: Request) -> ApiKeyService:
     return ApiKeyService(TenantRepository(sessionmaker), ApiKeyRepository(sessionmaker))
 
 
+def login_limit(settings: Settings) -> LoginLimit:
+    """The sign-in rate limit from the server's settings."""
+    return LoginLimit(
+        failures=settings.login_failure_limit,
+        window=timedelta(minutes=settings.login_failure_window_minutes),
+    )
+
+
+def alert_limits(settings: Settings) -> AlertLimits:
+    """The alert check interval and rule limits from the server's settings."""
+    return AlertLimits(
+        check_seconds=settings.alert_check_seconds,
+        max_emails=settings.alert_max_emails,
+        max_window_minutes=settings.alert_max_window_minutes,
+        max_rules_per_project=settings.alert_max_rules_per_project,
+    )
+
+
 def get_auth_service(request: Request) -> AuthService:
-    """Build the sign-in and session service on the app's Postgres pool."""
+    """Build the sign-in and session service on the app's Postgres pool and settings."""
     sessionmaker = request.app.state.postgres_sessionmaker
-    return AuthService(UserRepository(sessionmaker), SessionRepository(sessionmaker))
+    return AuthService(
+        UserRepository(sessionmaker),
+        SessionRepository(sessionmaker),
+        login_limit=login_limit(request.app.state.settings),
+    )
 
 
 def get_log_ingest_service(request: Request) -> LogIngestService:
@@ -133,16 +157,19 @@ def build_alert_check_service(
         LogSearchRepository(clickhouse),
         TenantRepository(sessionmaker),
         build_alert_notifier(settings),
+        timedelta(seconds=settings.alert_check_seconds),
     )
 
 
 def get_alert_rule_service(request: Request) -> AlertRuleService:
     """Build the alert rules service on the app's Postgres pool and settings."""
     sessionmaker = request.app.state.postgres_sessionmaker
+    settings = request.app.state.settings
     return AlertRuleService(
         AlertRuleRepository(sessionmaker),
         TenantRepository(sessionmaker),
-        build_alert_notifier(request.app.state.settings),
+        build_alert_notifier(settings),
+        alert_limits(settings),
     )
 
 

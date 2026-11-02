@@ -177,8 +177,11 @@ UNKNOWN_USER_DETAIL = "No user has this email."
 ORG_NAME_DETAIL = "organization: use letters or digits in the name."
 # Sign-in rate limit, per email: this many wrong passwords within the window locks that email
 # until the oldest of them is older than the window. A successful sign-in clears the count.
-LOGIN_FAILURE_LIMIT = 5
-LOGIN_FAILURE_WINDOW = timedelta(minutes=15)
+# Defaults and allowed ranges of SPANPORT_LOGIN_FAILURE_LIMIT / _WINDOW_MINUTES.
+DEFAULT_LOGIN_FAILURE_LIMIT = 5
+MAX_LOGIN_FAILURE_LIMIT = 100
+DEFAULT_LOGIN_FAILURE_WINDOW_MINUTES = 15
+MAX_LOGIN_FAILURE_WINDOW_MINUTES = 24 * 60
 TOO_MANY_LOGINS_DETAIL = "Too many wrong passwords for this email. Try again in {minutes} min."
 RETRY_AFTER_HEADER = "Retry-After"
 SECONDS_PER_MINUTE = 60
@@ -295,6 +298,7 @@ QUERY_KEYWORD_NOT = "NOT"
 ALERT_RULES_PATH = "/api/v1/alert-rules"
 ALERT_RULE_PATH = "/api/v1/alert-rules/{rule_id}"
 TEST_ALERT_RULE_PATH = "/api/v1/alert-rules/{rule_id}/test"
+ALERT_SETTINGS_PATH = "/api/v1/alert-settings"
 ALERT_EVENTS_PATH = "/api/v1/alert-events"
 ACKNOWLEDGE_ALERT_EVENT_PATH = "/api/v1/alert-events/{event_id}/acknowledge"
 RESOLVE_ALERT_EVENT_PATH = "/api/v1/alert-events/{event_id}/resolve"
@@ -303,11 +307,25 @@ MAX_ALERTS_LIMIT = 500
 MAX_ALERT_BODY_BYTES = 16 * 1024
 MAX_ALERT_NAME_LENGTH = 100
 MAX_ALERT_THRESHOLD = 1_000_000
-MAX_ALERT_WINDOW_MINUTES = 60
-MAX_ALERT_EMAILS = 10
+# Defaults and allowed ranges of the SPANPORT_ALERT_* settings. The ceilings also bound the
+# request schema, so a body is size-checked before the server's own limit is applied.
+DEFAULT_ALERT_MAX_WINDOW_MINUTES = 60
+ALERT_WINDOW_CEILING_MINUTES = 24 * 60
+DEFAULT_ALERT_MAX_EMAILS = 10
+ALERT_EMAILS_CEILING = 100
+DEFAULT_ALERT_MAX_RULES_PER_PROJECT = 50
+ALERT_RULES_CEILING = 1000
 # Each server checks due rules this often; rules are claimed with SKIP LOCKED, so replicas
 # never check the same rule twice.
-ALERT_CHECK_INTERVAL = timedelta(minutes=1)
+DEFAULT_ALERT_CHECK_SECONDS = 10
+MAX_ALERT_CHECK_SECONDS = 300
+# A checked rule is due again this much before the next round, so a round that wakes a little
+# early (clock drift) still checks it instead of skipping one. The interval must stay above it.
+MIN_ALERT_CHECK_SECONDS = 5
+ALERT_CHECK_EARLY = timedelta(seconds=2)
+# Each check also counts this far before the rule's window: lines reach storage a few seconds
+# after their timestamp (SDK and collector batching), so a late line is still counted.
+ALERT_CHECK_OVERLAP = timedelta(seconds=15)
 ALERT_CHECK_BATCH = 100
 NOTIFY_TIMEOUT_SECONDS = 10
 DEFAULT_SMTP_PORT = 587
@@ -363,6 +381,9 @@ NO_OPEN_ALERT_DETAIL = "No open alert with this id in your organization."
 EMAIL_NOT_SET_UP_DETAIL = (
     "Email isn't set up on this server. Set SPANPORT_SMTP_HOST and SPANPORT_SMTP_FROM."
 )
+ALERT_WINDOW_LIMIT_DETAIL = "window_minutes: this server allows 1 to {limit} minutes."
+ALERT_EMAILS_LIMIT_DETAIL = "email_recipients: this server allows 1 to {limit} addresses."
+ALERT_RULES_LIMIT_DETAIL = "This project already has {limit} alert rules, the most allowed."
 
 # ClickHouse: reply only after the rows are written to disk.
 LOGS_TABLE = "logs"

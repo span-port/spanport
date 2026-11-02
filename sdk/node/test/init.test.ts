@@ -39,14 +39,31 @@ describe("init and shutdown", () => {
     spanport.logStream().write('{"level":40,"msg":"from pino"}\n');
     await spanport.shutdown();
 
-    const posts = server.requests.filter((request) => request.method === "POST");
+    // Traces (e.g. of this fake server's own requests) go to /v1/traces; logs are checked here.
+    const posts = server.requests.filter((request) => request.method === "POST" && request.path === "/v1/logs");
     assert.ok(posts.length > 0);
-    assert.ok(posts.every((post) => post.path === "/v1/logs"));
     assert.ok(posts.every((post) => post.authorization === `Bearer ${VALID_KEY}`));
     const sent = posts.map((post) => post.body).join("");
     assert.ok(sent.includes("Payment failed for order 1042"));
     assert.ok(sent.includes("from pino"));
     assert.ok(sent.includes("orders-api"));
+  });
+
+  it("sends traces to /v1/traces with the data key, unless traces is false", async () => {
+    spanport.init({ dataKey: VALID_KEY, service: "orders-api", collectorUrl: server.url, checkKey: false });
+    await spanport.withSpan("checkout", () => Promise.resolve());
+    await spanport.shutdown();
+
+    const traces = server.requests.filter((request) => request.path === "/v1/traces");
+    assert.ok(traces.length > 0);
+    assert.ok(traces.every((post) => post.authorization === `Bearer ${VALID_KEY}`));
+    assert.match(stderr(), /sending logs and traces/);
+
+    server.requests.length = 0;
+    spanport.init({ dataKey: VALID_KEY, service: "orders-api", collectorUrl: server.url, checkKey: false, traces: false });
+    await spanport.withSpan("not sent", () => Promise.resolve());
+    await spanport.shutdown();
+    assert.ok(!server.requests.some((request) => request.path === "/v1/traces"));
   });
 
   it("leaves console untouched when captureConsole is false", () => {

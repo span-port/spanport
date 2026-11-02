@@ -1,19 +1,31 @@
 // A project's rules and alerts, and the actions on them. Every change reloads both lists.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ALERT_EVENTS_QUERY_KEY, ALERT_RULES_QUERY_KEY } from "../../../constants/api";
-import { ALERTS_REFRESH_MS } from "../../../constants/alerts";
+import { ALERT_EVENTS_QUERY_KEY, ALERT_RULES_QUERY_KEY, ALERT_SETTINGS_QUERY_KEY } from "../../../constants/api";
+import { DEFAULT_ALERT_LIMITS, MS_PER_SECOND } from "../../../constants/alerts";
 import { settingsOf } from "../../../lib/alerts";
 import {
   acknowledgeEvent,
   deleteRule,
+  fetchAlertLimits,
   fetchEvents,
   fetchRules,
   resolveEvent,
   testRule,
   updateRule,
+  type AlertLimits,
   type AlertRule,
 } from "../api";
+
+/** The server's alert settings, read once per visit; its defaults until they arrive. */
+export function useAlertLimits(): AlertLimits {
+  const { data } = useQuery({
+    queryKey: [ALERT_SETTINGS_QUERY_KEY],
+    queryFn: ({ signal }) => fetchAlertLimits(signal),
+    staleTime: Infinity,
+  });
+  return data ?? DEFAULT_ALERT_LIMITS;
+}
 
 /** The project's rules; nothing is loaded until a project is chosen. */
 export function useAlertRules(projectId: string | null) {
@@ -24,13 +36,14 @@ export function useAlertRules(projectId: string | null) {
   });
 }
 
-/** The project's alerts, newest first, refreshed while the page is open. */
+/** The project's alerts, newest first, refreshed as often as the server checks rules. */
 export function useAlertEvents(projectId: string | null) {
+  const { check_seconds } = useAlertLimits();
   return useQuery({
     queryKey: [ALERT_EVENTS_QUERY_KEY, projectId],
     queryFn: ({ signal }) => fetchEvents(projectId ?? "", signal),
     enabled: projectId !== null,
-    refetchInterval: ALERTS_REFRESH_MS,
+    refetchInterval: check_seconds * MS_PER_SECOND,
   });
 }
 

@@ -12,6 +12,7 @@ from spanport_server.core.constants import (
     ALERT_EVENTS_PATH,
     ALERT_RULE_PATH,
     ALERT_RULES_PATH,
+    ALERT_SETTINGS_PATH,
     DEFAULT_ALERTS_LIMIT,
     MAX_ALERT_BODY_BYTES,
     MAX_ALERTS_LIMIT,
@@ -29,6 +30,7 @@ from spanport_server.dependencies import (
 )
 from spanport_server.schemas.alert import (
     AlertEventListResponse,
+    AlertLimits,
     AlertRuleItem,
     AlertRuleListResponse,
     CreateAlertRuleRequest,
@@ -41,6 +43,19 @@ from spanport_server.services.alert_rule_service import AlertRuleService
 router = APIRouter()
 
 Limit = Annotated[int, Query(ge=1, le=MAX_ALERTS_LIMIT)]
+
+
+@router.get(ALERT_SETTINGS_PATH)
+async def alert_settings(
+    caller: Annotated[Caller, Depends(require_signed_in)],
+    rule_service: Annotated[AlertRuleService, Depends(get_alert_rule_service)],
+) -> AlertLimits:
+    """This server's alert check interval and rule limits.
+
+    Raises:
+        NotSignedInError (401).
+    """
+    return rule_service.limits(caller)
 
 
 @router.get(ALERT_RULES_PATH)

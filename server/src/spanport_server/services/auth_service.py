@@ -14,8 +14,6 @@ from spanport_server.core.constants import (
     INVALID_INVITE_DETAIL,
     INVALID_LOGIN_DETAIL,
     INVALID_SETUP_DETAIL,
-    LOGIN_FAILURE_LIMIT,
-    LOGIN_FAILURE_WINDOW,
     MIN_PASSWORD_LENGTH,
     NOT_SIGNED_IN_DETAIL,
     ORG_NAME_DETAIL,
@@ -44,7 +42,13 @@ from spanport_server.core.errors import (
 from spanport_server.core.ids import UuidV7
 from spanport_server.core.key_hashing import hash_api_key
 from spanport_server.core.passwords import hash_password, verify_password
-from spanport_server.schemas.auth import LoginRequest, SetupRequest, SignedIn, UserRecord
+from spanport_server.schemas.auth import (
+    LoginLimit,
+    LoginRequest,
+    SetupRequest,
+    SignedIn,
+    UserRecord,
+)
 from spanport_server.schemas.team import AcceptInviteRequest, InviteDetails
 
 logger = logging.getLogger(__name__)
@@ -136,7 +140,11 @@ class AuthService:
     """Who is signed in. Raw session ids, CSRF and setup tokens are never stored or logged."""
 
     def __init__(
-        self, users: UserStore, sessions: SessionStore, now: Callable[[], datetime] = utc_now
+        self,
+        users: UserStore,
+        sessions: SessionStore,
+        now: Callable[[], datetime] = utc_now,
+        login_limit: LoginLimit | None = None,
     ) -> None:
         """Create the service.
 
@@ -144,10 +152,13 @@ class AuthService:
             users: User and setup token storage.
             sessions: Session storage.
             now: The clock; tests pass a fixed one.
+            login_limit: The sign-in rate limit from the server's settings; the defaults
+                when None.
         """
         self._users = users
         self._sessions = sessions
         self._now = now
+        self._login_limit = login_limit or LoginLimit()
 
     async def issue_setup_token(self) -> str | None:
         """Create a one-time setup token while no user exists yet.
@@ -225,7 +236,7 @@ class AuthService:
     async def login(self, request: LoginRequest) -> SignedIn:
         """Sign in with email and password.
 
-        After LOGIN_FAILURE_LIMIT wrong passwords for one email within LOGIN_FAILURE_WINDOW, that
+        After the login limit's wrong passwords for one email within its window, that
         email is refused (even with the right password) until the window has passed, so a
         password can't be guessed by trying many. Unknown emails count too, so the answer
         doesn't reveal which emails exist.
@@ -240,7 +251,7 @@ class AuthService:
         found = await self._users.find_for_login(normalize_email(request.email))
         user, password_hash = found if found else (None, None)
         if user is None or not verify_password(password_hash, request.password):
-            await self._users.record_login_failure(email_hash, now, now - LOGIN_FAILURE_WINDOW)
+            await self._users.record_login_failure(email_hash, now, now - self._login_limit.window)
             logger.info("sign-in rejected: wrong email or password")
             raise InvalidLoginError(INVALID_LOGIN_DETAIL)
         await self._users.clear_login_failures(email_hash)
@@ -249,11 +260,12 @@ class AuthService:
 
     async def _check_login_limit(self, email_hash: str, now: datetime) -> None:
         """Refuse sign-in while this email has too many recent wrong passwords."""
-        failures = await self._users.recent_login_failures(email_hash, now - LOGIN_FAILURE_WINDOW)
-        if len(failures) < LOGIN_FAILURE_LIMIT:
+        limit = self._login_limit
+        failures = await self._users.recent_login_failures(email_hash, now - limit.window)
+        if len(failures) < limit.failures:
             return
-        # The lock lifts once the oldest of the last LOGIN_FAILURE_LIMIT failures leaves the window.
-        retry_after = failures[-LOGIN_FAILURE_LIMIT] + LOGIN_FAILURE_WINDOW - now
+        # The lock lifts once the oldest of the last `limit.failures` failures leaves the window.
+        retry_after = failures[-limit.failures] + limit.window - now
         seconds = max(1, math.ceil(retry_after.total_seconds()))
         minutes = math.ceil(seconds / SECONDS_PER_MINUTE)
         logger.warning("sign-in rate limited failures=%d retry_after_s=%d", len(failures), seconds)

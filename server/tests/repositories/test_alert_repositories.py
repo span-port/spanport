@@ -46,6 +46,7 @@ async def test_due_rules_are_claimed_once_until_their_next_check(
     assert again == []
     assert [r.id for r in later] == [rule.id]
     assert await rules.list_org_ids() == [project.org_id]
+    assert await rules.count_rules(project.org_id, project.project_id) == 1
 
 
 async def test_one_open_alert_per_rule_then_acknowledge_and_resolve(
