@@ -1,4 +1,5 @@
-/* Layout and components, following the UI canvas. Only token values; no animation. */
+/* Layout and components, following the UI canvas. Only token values; the one animation is the
+   waterfall's entrance, which is off for people who ask for reduced motion. */
 *,
 *::before,
 *::after {
@@ -1994,72 +1995,394 @@ select.input option:disabled {
   }
 }
 
-/* Requests list */
-.request-filters {
+/* Requests and APIs: heading actions, filter bar, tables */
+.heading-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
 }
 
-.request-filters > .input {
-  flex: 1 1 240px;
+.back-link {
+  align-self: flex-start;
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-card);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-card);
+}
+
+.filter-search {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.filter-field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.filter-chip {
+  min-height: var(--control-height-small);
+  padding: 0 var(--space-3);
+  background: var(--color-accent-soft);
+  color: var(--color-link);
+  border: var(--border-width) solid var(--color-accent);
+  border-radius: var(--radius-lg);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
 }
 
 .request-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   color: var(--color-text);
   text-decoration: none;
 }
 
 .request-link:hover {
-  color: var(--color-accent);
+  color: var(--color-link-hover);
 }
 
-.status-error {
+.method-tag {
+  padding: 1px var(--space-2);
+  background: var(--color-raised);
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.status-pill {
+  display: inline-block;
+  padding: 1px var(--space-2);
+  background: var(--color-green-soft);
+  color: var(--color-green);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.status-pill[data-error="true"] {
+  background: var(--level-error-bg);
   color: var(--level-error-fg);
 }
 
-/* Waterfall: step name and label, own time, then the bar on the trace's timeline. */
-.waterfall-head,
-.waterfall-row {
-  display: grid;
-  grid-template-columns: minmax(220px, 2fr) 90px minmax(260px, 3fr);
-  align-items: center;
-  gap: var(--space-3);
-  width: 100%;
-  padding: var(--space-2) var(--space-4);
-}
-
-.waterfall-head {
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.waterfall-row {
-  border: none;
-  border-top: var(--border-width) solid var(--color-divider);
-  background: none;
-  color: var(--color-text);
-  font: inherit;
-  text-align: left;
+.clickable-row {
   cursor: pointer;
 }
 
-.waterfall-row:hover {
-  background: var(--color-nav-active);
+.clickable-row:hover {
+  background: var(--color-raised);
 }
 
-.waterfall-row[data-error="true"] .waterfall-name {
+.clickable-row:hover .request-link {
+  color: var(--color-link-hover);
+}
+
+.duration-head {
+  width: 160px;
+}
+
+.duration-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  white-space: nowrap;
+}
+
+.duration-bar {
+  width: var(--duration-bar-width);
+  height: 6px;
+  background: var(--color-divider);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.duration-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-accent);
+  border-radius: var(--radius-sm);
+}
+
+.duration-fill[data-error="true"] {
+  background: var(--level-error-fg);
+}
+
+/* Summary numbers: requests, error rate, time per kind of step */
+.stat-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  background: var(--color-card);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-card);
+}
+
+.stat-card-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.stat-card-value {
+  font-size: var(--text-xl);
+  font-weight: 600;
+}
+
+.swatch {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+/* One colour per kind of step, shared by bars, swatches and the APIs split */
+.step-code {
+  background: var(--step-code);
+}
+
+.step-db {
+  background: var(--step-db);
+}
+
+.step-external {
+  background: var(--step-external);
+}
+
+.step-llm {
+  background: var(--step-llm);
+}
+
+/* APIs table */
+.table-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-2);
+}
+
+.step-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  list-style: none;
+}
+
+.step-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.endpoint-table .number {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.endpoint-table td[data-error="true"] {
+  color: var(--level-error-fg);
+}
+
+.endpoint-table .strong {
+  font-weight: 600;
+}
+
+.th-note {
+  display: block;
+  font-weight: 400;
+  text-transform: none;
+}
+
+.where-time-head {
+  min-width: 220px;
+}
+
+.share-bar {
+  display: flex;
+  height: 10px;
+  margin-bottom: var(--space-1);
+  overflow: hidden;
+  background: var(--color-divider);
+  border-radius: 3px;
+}
+
+/* Trace page: title, then the waterfall beside the chosen step's details */
+.trace-title {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.trace-title-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.trace-title .page-title {
+  font-size: var(--text-xl);
+  overflow-wrap: anywhere;
+}
+
+.trace-layout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-5);
+}
+
+/* Waterfall: step names on the left, one shared timeline, durations on the right */
+.waterfall {
+  flex: 1.618 1 600px;
+  min-width: 0;
+}
+
+.waterfall-title {
+  margin: 0;
+  padding: var(--space-4) var(--space-4) var(--space-2);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.waterfall-scroll {
+  overflow-x: auto;
+  padding-bottom: var(--space-2);
+}
+
+.waterfall-grid {
+  display: grid;
+  grid-template-columns: var(--waterfall-columns);
+  align-items: center;
+  gap: var(--space-3);
+  min-width: var(--waterfall-min-width);
+  padding: 0 var(--space-4);
+}
+
+.waterfall-head {
+  height: 32px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.waterfall-axis {
+  position: relative;
+  height: 16px;
+}
+
+.waterfall-tick {
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.waterfall-tick:last-child:not(:first-child) {
+  transform: translateX(-100%);
+}
+
+.waterfall-duration-head,
+.waterfall-duration {
+  text-align: right;
+}
+
+.waterfall-row {
+  min-height: 40px;
+  border-bottom: var(--border-width) solid var(--color-divider);
+  cursor: pointer;
+  animation: waterfall-row-in var(--motion-bar) var(--motion-ease) both;
+  animation-delay: calc(var(--row-order) * var(--motion-row-delay));
+}
+
+.waterfall-row:hover {
+  background: var(--color-raised);
+}
+
+.waterfall-row[data-selected="true"] {
+  background: var(--color-nav-active);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+.waterfall-row[data-error="true"] .waterfall-step .truncate {
   color: var(--level-error-fg);
 }
 
 .waterfall-name {
   display: flex;
   align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.waterfall-toggle,
+.waterfall-toggle-space {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
+
+.waterfall-toggle {
+  padding: 0;
+  background: none;
+  color: var(--color-text-secondary);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.waterfall-toggle:hover {
+  background: var(--color-divider);
+  color: var(--color-text);
+}
+
+.waterfall-step {
+  display: flex;
+  align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  padding: var(--space-2) 0;
+  background: none;
+  color: var(--color-text);
+  border: none;
+  font: inherit;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
 }
 
 .truncate {
@@ -2070,83 +2393,145 @@ select.input option:disabled {
 
 .waterfall-track {
   position: relative;
-  display: flex;
-  align-items: center;
-  height: 18px;
+  height: 14px;
 }
 
+.waterfall-gridline {
+  position: absolute;
+  top: -13px;
+  bottom: -13px;
+  width: var(--border-width);
+  background: var(--color-divider);
+}
+
+/* Each bar grows from where its step started, in the row's turn. */
 .waterfall-bar {
-  display: block;
-  height: 10px;
-  border-radius: var(--radius-sm);
-  background: var(--level-debug-fg);
+  position: absolute;
+  top: 0;
+  height: 14px;
+  min-width: 3px;
+  border-radius: 3px;
+  transform-origin: left center;
+  animation: waterfall-bar-grow var(--motion-bar) var(--motion-ease) both;
+  animation-delay: calc(var(--row-order) * var(--motion-row-delay));
+}
+
+.waterfall-row:hover .waterfall-bar,
+.waterfall-row[data-selected="true"] .waterfall-bar {
+  filter: brightness(1.25);
+}
+
+.waterfall-row[data-error="true"] .waterfall-bar {
+  box-shadow: inset 0 0 0 2px var(--level-error-fg);
 }
 
 .waterfall-duration {
-  margin-left: var(--space-2);
   color: var(--color-text-secondary);
+  font-size: var(--text-sm);
 }
 
-.waterfall-details {
-  display: grid;
-  grid-template-columns: minmax(140px, max-content) 1fr;
-  gap: var(--space-1) var(--space-4);
+@keyframes waterfall-bar-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes waterfall-row-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .waterfall-row,
+  .waterfall-bar {
+    animation: none;
+  }
+}
+
+/* The chosen step's details */
+.span-details {
+  flex: 1 1 var(--details-width);
+  gap: var(--space-4);
+  position: sticky;
+  top: var(--space-5);
+  max-height: calc(100vh - var(--space-7));
+  overflow-y: auto;
+}
+
+.span-details-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.span-details-name {
   margin: 0;
-  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-6);
-  background: var(--color-sidebar);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
-.waterfall-details dd {
+.span-details-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
   margin: 0;
 }
 
-/* One colour per kind of step, shared by the label and the bar. */
+.span-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+  border-bottom: var(--border-width) solid var(--color-divider);
+  font-size: var(--text-sm);
+}
+
+.span-detail dt {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.span-detail dd {
+  margin: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* A step's kind as a tag, in the colours of its bar */
 .span-label {
   flex-shrink: 0;
   padding: 1px var(--space-2);
   border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
   font-size: var(--text-xs);
   font-weight: 600;
+}
+
+.step-label-code {
   background: var(--level-debug-bg);
-  color: var(--level-debug-fg);
+  color: var(--step-code-text);
 }
 
-.span-label-incoming_request {
+.step-label-db {
   background: var(--level-info-bg);
-  color: var(--level-info-fg);
+  color: var(--step-db-text);
 }
 
-.span-bar-incoming_request {
-  background: var(--level-info-fg);
+.step-label-external {
+  background: var(--step-external-soft);
+  color: var(--step-external-text);
 }
 
-.span-label-db {
+.step-label-llm {
   background: var(--level-warn-bg);
-  color: var(--level-warn-fg);
-}
-
-.span-bar-db {
-  background: var(--level-warn-fg);
-}
-
-.span-label-external,
-.span-label-service_call {
-  background: var(--color-green-soft);
-  color: var(--color-green);
-}
-
-.span-bar-external,
-.span-bar-service_call {
-  background: var(--color-green);
-}
-
-.span-label-llm {
-  background: var(--level-error-bg);
-  color: var(--level-error-fg);
-}
-
-.span-bar-llm {
-  background: var(--level-error-fg);
+  color: var(--step-llm-text);
 }

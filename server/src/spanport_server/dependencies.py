@@ -21,6 +21,7 @@ from spanport_server.core.constants import (
     SESSION_COOKIE,
 )
 from spanport_server.core.errors import NotAllowedError
+from spanport_server.repositories.clickhouse.endpoint_repository import EndpointRepository
 from spanport_server.repositories.clickhouse.log_repository import LogRepository
 from spanport_server.repositories.clickhouse.log_search_repository import LogSearchRepository
 from spanport_server.repositories.clickhouse.project_data_repository import ProjectDataRepository
@@ -43,6 +44,7 @@ from spanport_server.services.alert_rule_service import AlertRuleService
 from spanport_server.services.api_key_auth_service import ApiKeyAuthService
 from spanport_server.services.api_key_service import ApiKeyService
 from spanport_server.services.auth_service import AuthService
+from spanport_server.services.endpoint_service import EndpointService
 from spanport_server.services.log_export_service import LogExportService
 from spanport_server.services.log_ingest_service import LogIngestService
 from spanport_server.services.log_search_service import LogSearchService
@@ -107,6 +109,14 @@ def get_trace_service(request: Request) -> TraceService:
     return TraceService(
         TenantRepository(request.app.state.postgres_sessionmaker),
         SpanSearchRepository(request.app.state.clickhouse_client),
+    )
+
+
+def get_endpoint_service(request: Request) -> EndpointService:
+    """Build the API monitoring (APIs screen) service on Postgres and ClickHouse."""
+    return EndpointService(
+        TenantRepository(request.app.state.postgres_sessionmaker),
+        EndpointRepository(request.app.state.clickhouse_client),
     )
 
 

@@ -59,9 +59,9 @@ If the second line is missing or says something else, see [Troubleshooting](#tro
 
 `init()` also times each request your app handles and every step inside it, and sends them as traces; open **Requests** in Spanport to see them as a waterfall (request → controller → service → database / outgoing calls). Pass `traces: false` to send logs only.
 
-- **Always on:** incoming HTTP requests and outgoing `http`/`https` calls. Outgoing calls carry a W3C `traceparent` header, so your other services running the SDK join the same trace (shown as a service call).
-- **If your app has them installed**, also: route names for Express and NestJS (`npm install @opentelemetry/instrumentation-express`), Postgres queries (`@opentelemetry/instrumentation-pg`) and `fetch` calls (`@opentelemetry/instrumentation-undici`). On start-up the SDK says which it found: `spanport: also timing: ...`.
-- **Call `init()` before your framework loads**, from a small file imported first, so Express and Postgres get timed:
+- **Timed out of the box, nothing else to install:** incoming HTTP requests, outgoing `http`/`https` and `fetch` calls, route names for Express and NestJS, and Postgres queries (`pg`, so also TypeORM, Knex or Sequelize on Postgres). Each only does something if your app uses that library.
+- Outgoing calls carry a W3C `traceparent` header, so your other services running the SDK join the same trace (shown as a service call).
+- **Call `init()` before your framework loads**, from a small file imported first, so Express and Postgres get timed. If requests show up named just `GET` with no database steps, `init()` ran too late:
 
 ```ts
 // src/spanport.ts

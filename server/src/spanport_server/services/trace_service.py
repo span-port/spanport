@@ -16,6 +16,7 @@ from spanport_server.core.constants import (
     NANOS_PER_MILLISECOND,
     NO_PROJECT_DETAIL,
     NO_TRACE_DETAIL,
+    RANGE_ORDER_DETAIL,
     SPAN_RETENTION,
     TRACE_ID_PATTERN,
     TRACE_RANGE_DETAIL,
@@ -37,6 +38,34 @@ from spanport_server.services.trace_cursor import decode_trace_cursor, encode_tr
 from spanport_server.services.trace_shape import build_trace_detail
 
 logger = logging.getLogger(__name__)
+
+
+def span_range(start: datetime, end: datetime) -> tuple[datetime, datetime]:
+    """The range in UTC, checked: forwards, and starting within the 30 days spans are kept.
+
+    Raises:
+        InvalidRequestError: The range is backwards or starts too long ago.
+    """
+    start, end = start.astimezone(UTC), end.astimezone(UTC)
+    if end <= start:
+        raise InvalidRequestError(RANGE_ORDER_DETAIL)
+    if start < datetime.now(UTC) - SPAN_RETENTION:
+        raise InvalidRequestError(TRACE_RANGE_DETAIL)
+    return start, end
+
+
+async def check_visible_project(
+    caller: Caller, project_id: UuidV7, projects: ProjectLookup
+) -> None:
+    """A project the caller may not see answers like one that doesn't exist.
+
+    Raises:
+        NotFoundError: Not in the caller's org, or not one of their projects.
+    """
+    if not caller.can_see(project_id) or not await projects.project_exists(
+        caller.org_id, project_id
+    ):
+        raise NotFoundError(NO_PROJECT_DETAIL)
 
 
 class SpanSearchStore(Protocol):
@@ -77,12 +106,8 @@ class TraceService:
             StorageUnavailableError: ClickHouse is down.
         """
         started = time.perf_counter()
-        await self._check_project(caller, request.project_id)
-        start, end = request.start.astimezone(UTC), request.end.astimezone(UTC)
-        if end <= start:
-            raise InvalidRequestError("end must be after start.")
-        if start < datetime.now(UTC) - SPAN_RETENTION:
-            raise InvalidRequestError(TRACE_RANGE_DETAIL)
+        await check_visible_project(caller, request.project_id, self._projects)
+        start, end = span_range(request.start, request.end)
         query = RequestQuery(
             org_id=caller.org_id,
             project_id=request.project_id,
@@ -128,7 +153,7 @@ class TraceService:
         started = time.perf_counter()
         if not re.fullmatch(TRACE_ID_PATTERN, trace_id):
             raise InvalidRequestError(INVALID_REQUEST_TRACE_DETAIL)
-        await self._check_project(caller, project_id)
+        await check_visible_project(caller, project_id, self._projects)
         since = datetime.now(UTC) - SPAN_RETENTION
         spans = await self._spans.trace_spans(
             caller.org_id, project_id, trace_id, since, MAX_TRACE_SPANS + 1
@@ -147,10 +172,3 @@ class TraceService:
             (time.perf_counter() - started) * 1000,
         )
         return detail
-
-    async def _check_project(self, caller: Caller, project_id: UuidV7) -> None:
-        """A project the caller may not see answers like one that doesn't exist."""
-        if not caller.can_see(project_id) or not await self._projects.project_exists(
-            caller.org_id, project_id
-        ):
-            raise NotFoundError(NO_PROJECT_DETAIL)

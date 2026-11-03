@@ -1,6 +1,7 @@
 /**
- * Traces: each request the app handles, and each step inside it (outgoing HTTP, database calls,
- * decorated controllers and services), sent in the background to the collector's /v1/traces.
+ * Traces: each request the app handles, and each step inside it (outgoing HTTP and fetch calls,
+ * Postgres queries, Express and NestJS routes, decorated controllers and services), sent in the
+ * background to the collector's /v1/traces.
  */
 
 import { createRequire } from "node:module";
@@ -9,15 +10,17 @@ import { context, propagation, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { type Instrumentation, registerInstrumentations } from "@opentelemetry/instrumentation";
+import { registerInstrumentations } from "@opentelemetry/instrumentation";
+import { ExpressInstrumentation } from "@opentelemetry/instrumentation-express";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
+import { PgInstrumentation } from "@opentelemetry/instrumentation-pg";
+import { UndiciInstrumentation } from "@opentelemetry/instrumentation-undici";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BatchSpanProcessor, type SpanExporter, TracerProvider } from "@opentelemetry/sdk-trace";
 
 import {
   AUTHORIZATION_HEADER,
   BEARER_PREFIX,
-  OPTIONAL_INSTRUMENTATIONS,
   OTLP_TRACES_PATH,
   PATCHED_BUILTINS,
   SERVICE_NAME_ATTRIBUTE,
@@ -26,8 +29,6 @@ import { joinUrl } from "./urls.js";
 
 export interface ActiveTracing {
   provider: TracerProvider;
-  /** Names of the optional instrumentations the app had installed. */
-  optional: string[];
   /** Send what is queued, then stop tracing and put the globals back. */
   stop: () => Promise<void>;
 }
@@ -53,20 +54,15 @@ export function buildTraceExporter(collectorUrl: string, dataKey: string): OTLPT
 
 /**
  * Start tracing: keep the current request across awaits, register the tracer provider and switch
- * on HTTP timing plus any optional instrumentation the app has installed.
+ * on timing for HTTP, fetch, Postgres and Express (each only does something if the app uses that
+ * library, and only for libraries loaded after this runs).
  *
  * @param service - Service name shown in Spanport.
  * @param exporter - Where span batches go; OTLP in real use, in-memory in tests.
  * @param ownHosts - The SDK's own collector and server, never traced.
- * @param loadModule - Loads an optional instrumentation by name; tests pass their own.
  * @returns The running tracing, and how to stop it.
  */
-export function startTracing(
-  service: string,
-  exporter: SpanExporter,
-  ownHosts: OwnHosts,
-  loadModule: (name: string) => unknown = requireInstalled,
-): ActiveTracing {
+export function startTracing(service: string, exporter: SpanExporter, ownHosts: OwnHosts): ActiveTracing {
   const contextManager = new AsyncLocalStorageContextManager().enable();
   context.setGlobalContextManager(contextManager);
   // Outgoing calls carry a W3C traceparent header, so another service running the SDK joins
@@ -78,16 +74,20 @@ export function startTracing(
   });
   trace.setGlobalTracerProvider(provider);
   useHttpInstrumentation(provider, ownHosts);
-  const optional = loadOptionalInstrumentations(loadModule);
-  const unregisterOptional = registerInstrumentations({
+  const unregisterLibraries = registerInstrumentations({
     tracerProvider: provider,
-    instrumentations: optional.map((loaded) => loaded.instrumentation),
+    instrumentations: [
+      new ExpressInstrumentation(),
+      new PgInstrumentation(),
+      new UndiciInstrumentation({
+        ignoreRequestHook: (request) => ownHostsOf(ownHosts).has(new URL(request.origin).host),
+      }),
+    ],
   });
   return {
     provider,
-    optional: optional.map((loaded) => loaded.module),
     stop: async () => {
-      unregisterOptional();
+      unregisterLibraries();
       // The HTTP instrumentation stays on (see useHttpInstrumentation); with its provider shut
       // down, the spans it makes go nowhere.
       await provider.shutdown();
@@ -107,7 +107,7 @@ let httpInstrumentation: HttpInstrumentation | undefined;
  * Time incoming requests and outgoing http/https calls (except the SDK's own) into `provider`.
  */
 function useHttpInstrumentation(provider: TracerProvider, ownHosts: OwnHosts): void {
-  const ownOrigins = new Set([new URL(ownHosts.collectorUrl).host, new URL(ownHosts.serverUrl).host]);
+  const ownOrigins = ownHostsOf(ownHosts);
   const config = {
     ignoreOutgoingRequestHook: (request: Parameters<typeof outgoingHost>[0]) => ownOrigins.has(outgoingHost(request)),
   };
@@ -133,37 +133,9 @@ function outgoingHost(request: {
   return request.port ? `${host}:${String(request.port)}` : host;
 }
 
-interface LoadedInstrumentation {
-  module: string;
-  instrumentation: Instrumentation;
-}
-
-/** The optional instrumentations the app has installed; anything missing is skipped quietly. */
-function loadOptionalInstrumentations(loadModule: (name: string) => unknown): LoadedInstrumentation[] {
-  const loaded: LoadedInstrumentation[] = [];
-  for (const { module, exportName } of OPTIONAL_INSTRUMENTATIONS) {
-    const instrumentation = construct(loadModule(module), exportName);
-    if (instrumentation) loaded.push({ module, instrumentation });
-  }
-  return loaded;
-}
-
-/** `new exports[exportName]()`, or undefined when the module or the class isn't there. */
-function construct(moduleExports: unknown, exportName: string): Instrumentation | undefined {
-  if (typeof moduleExports !== "object" || moduleExports === null) return undefined;
-  const exported: unknown = (moduleExports as Record<string, unknown>)[exportName];
-  if (typeof exported !== "function") return undefined;
-  return new (exported as new () => Instrumentation)();
+/** "host:port" of the SDK's own collector and server (calls to them, like the key check, aren't timed). */
+function ownHostsOf(ownHosts: OwnHosts): Set<string> {
+  return new Set([new URL(ownHosts.collectorUrl).host, new URL(ownHosts.serverUrl).host]);
 }
 
 const requireFromApp = createRequire(import.meta.url);
-
-/** The module if the app has it installed, else undefined. */
-function requireInstalled(name: string): unknown {
-  try {
-    return requireFromApp(name);
-  } catch {
-    // Not installed: that instrumentation is simply off.
-    return undefined;
-  }
-}

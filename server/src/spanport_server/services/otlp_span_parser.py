@@ -1,6 +1,7 @@
 """Turns an OTLP traces request (protobuf) into rows for the spans table, each labelled with
 what it was (TRD "Span classification")."""
 
+import re
 from collections.abc import Iterable
 from datetime import datetime, timedelta
 
@@ -14,9 +15,11 @@ from spanport_server.core.constants import (
     HTTP_METHOD_ATTRIBUTES,
     HTTP_ROUTE_ATTRIBUTES,
     HTTP_STATUS_ATTRIBUTES,
+    ID_SEGMENT_PATTERN,
     INCOMING_SPAN_KINDS,
     NANOS_PER_MICROSECOND,
     OUTGOING_SPAN_KINDS,
+    ROUTE_ID_PLACEHOLDER,
     SERVICE_NAME_ATTRIBUTE,
     SPAN_CATEGORY_CLIENT,
     SPAN_CATEGORY_CODE,
@@ -29,6 +32,9 @@ from spanport_server.core.constants import (
     SPAN_STATUS_UNSET,
     STATUS_CODE_PREFIX,
     UNKNOWN_SERVICE_NAME,
+    URL_PATH_ATTRIBUTES,
+    URL_PATH_SEPARATOR,
+    URL_QUERY_SEPARATOR,
 )
 from spanport_server.core.errors import InvalidRequestError
 from spanport_server.schemas.span_row import SpanRow
@@ -98,7 +104,7 @@ def to_span_row(
         status_code=status_name(span.status.code),
         status_message=span.status.message,
         http_method=first_of(attributes, HTTP_METHOD_ATTRIBUTES).upper(),
-        http_route=first_of(attributes, HTTP_ROUTE_ATTRIBUTES),
+        http_route=http_route(attributes),
         http_status=http_status(attributes),
         attributes=attributes,
         resource_attributes=resource_attributes,
@@ -139,6 +145,26 @@ def status_name(value: int) -> str:
 def first_of(attributes: dict[str, str], names: Iterable[str]) -> str:
     """The first of `names` the span has, or ""."""
     return next((attributes[name] for name in names if name in attributes), "")
+
+
+def http_route(attributes: dict[str, str]) -> str:
+    """The route the framework reported, else the request's path with its ids as ":id"."""
+    route = first_of(attributes, HTTP_ROUTE_ATTRIBUTES)
+    if route:
+        return route
+    path = first_of(attributes, URL_PATH_ATTRIBUTES).split(URL_QUERY_SEPARATOR, 1)[0]
+    return route_from_path(path)
+
+
+def route_from_path(path: str) -> str:
+    """The path with id-like parts as ":id".
+
+    e.g. "/api/environments/64f1c0ffee00000000000001/items/42" → "/api/environments/:id/items/:id".
+    """
+    return URL_PATH_SEPARATOR.join(
+        ROUTE_ID_PLACEHOLDER if re.fullmatch(ID_SEGMENT_PATTERN, segment) else segment
+        for segment in path.split(URL_PATH_SEPARATOR)
+    )
 
 
 def http_status(attributes: dict[str, str]) -> int:

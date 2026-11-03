@@ -7,6 +7,7 @@ from fakes import (
     SAMPLE_ADMIN_KEY,
     SAMPLE_DATA_KEY,
     FakeApiKeyStore,
+    FakeEndpointStatsStore,
     FakeLogSearchStore,
     FakeSessionStore,
     FakeSpanSearchStore,
@@ -18,6 +19,7 @@ from spanport_server.core.ids import new_id
 from spanport_server.dependencies import (
     get_api_key_auth_service,
     get_auth_service,
+    get_endpoint_service,
     get_log_export_service,
     get_log_search_service,
     get_trace_service,
@@ -27,6 +29,7 @@ from spanport_server.schemas.api_key import KeyType, Scope
 from spanport_server.schemas.tenant import ProjectRef
 from spanport_server.services.api_key_auth_service import ApiKeyAuthService
 from spanport_server.services.auth_service import AuthService
+from spanport_server.services.endpoint_service import EndpointService
 from spanport_server.services.log_export_service import LogExportService
 from spanport_server.services.log_search_service import LogSearchService
 from spanport_server.services.trace_service import TraceService
@@ -85,6 +88,9 @@ async def setup() -> AsyncIterator[Setup]:
     app.dependency_overrides[get_trace_service] = lambda: TraceService(
         tenants, FakeSpanSearchStore()
     )
+    app.dependency_overrides[get_endpoint_service] = lambda: EndpointService(
+        tenants, FakeEndpointStatsStore()
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield Setup(client, project)
@@ -109,6 +115,21 @@ async def test_trace_search_and_a_missing_trace(setup: Setup) -> None:
     assert searched.status_code == 200
     assert searched.json() == {"data": [], "next_cursor": None, "has_more": False}
     assert missing.status_code == 404
+    assert unauthenticated.status_code == 401
+
+
+async def test_endpoint_summary_needs_a_reader_and_a_valid_body(setup: Setup) -> None:
+    summary = await setup.post("/api/v1/endpoints/summary", setup.body(service="api"))
+    unknown_field = await setup.post("/api/v1/endpoints/summary", setup.body(filters=[]))
+    unauthenticated = await setup.post("/api/v1/endpoints/summary", setup.body(), key=None)
+
+    assert summary.json() == {
+        "totals": {"requests": 0, "errors": 0, "p95_ms": 0},
+        "data": [],
+        "next_cursor": None,
+        "has_more": False,
+    }
+    assert unknown_field.status_code == 400
     assert unauthenticated.status_code == 401
 
 

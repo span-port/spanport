@@ -114,6 +114,15 @@ describe("Requests", () => {
     expect(bodies.at(-1)?.errors_only).toBe(true);
   });
 
+  it("opens a request's waterfall from anywhere on its row", async () => {
+    server();
+    renderAt("/requests?project=p1");
+
+    await userEvent.click(await screen.findByText("kosha-backend"));
+
+    expect(await screen.findByRole("region", { name: "Waterfall" })).toBeDefined();
+  });
+
   it("shows a request as a nested waterfall with own times and a link to its logs", async () => {
     server();
     renderAt(`/requests/${TRACE}?project=p1`);
@@ -124,6 +133,21 @@ describe("Requests", () => {
     expect(screen.getByRole("link", { name: "See logs" }).getAttribute("href")).toContain(`query=trace%3A${TRACE}`);
 
     await userEvent.click(screen.getByRole("button", { name: /SELECT variables/ }));
-    expect(screen.getByText("db.system")).toBeDefined();
+    const details = screen.getByRole("complementary", { name: "Step details" });
+    expect(details.textContent).toContain("SELECT variables");
+    expect(details.textContent).toContain("db.system");
+  });
+
+  it("splits the request's time by kind of step and hides the steps inside a collapsed one", async () => {
+    server();
+    renderAt(`/requests/${TRACE}?project=p1`);
+
+    expect((await screen.findByText("External calls")).parentElement?.textContent).toBe("External calls790 ms");
+    expect(screen.getByText("Your code").parentElement?.textContent).toBe("Your code53 ms");
+    await userEvent.click(screen.getByRole("button", { name: "Hide the steps inside VariablesService.list" }));
+
+    expect(screen.queryByRole("button", { name: /AWS Secrets Manager/ })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Show the steps inside VariablesService.list" }));
+    expect(screen.getByRole("button", { name: /AWS Secrets Manager/ })).toBeDefined();
   });
 });

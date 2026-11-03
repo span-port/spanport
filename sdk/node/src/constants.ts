@@ -6,15 +6,6 @@ export const DEFAULT_SERVER_URL = "http://localhost:8000";
 export const OTLP_LOGS_PATH = "/v1/logs";
 export const OTLP_TRACES_PATH = "/v1/traces";
 
-/**
- * Instrumentations switched on only when the app has installed them (they patch libraries the
- * SDK doesn't depend on): Express and NestJS route names, Postgres queries, fetch calls.
- */
-export const OPTIONAL_INSTRUMENTATIONS: readonly { module: string; exportName: string }[] = [
-  { module: "@opentelemetry/instrumentation-express", exportName: "ExpressInstrumentation" },
-  { module: "@opentelemetry/instrumentation-pg", exportName: "PgInstrumentation" },
-  { module: "@opentelemetry/instrumentation-undici", exportName: "UndiciInstrumentation" },
-];
 /** Node built-ins the HTTP instrumentation patches; required once when tracing starts. */
 export const PATCHED_BUILTINS: readonly string[] = ["node:http", "node:https"];
 /** Separates a decorated class's name from its method in span names, e.g. "UsersService.find". */

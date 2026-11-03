@@ -100,6 +100,20 @@ DB_SYSTEM_ATTRIBUTE = "db.system"
 # many libraries.
 HTTP_METHOD_ATTRIBUTES = ("http.request.method", "http.method")
 HTTP_ROUTE_ATTRIBUTES = ("http.route",)
+# Without a route (no framework instrumentation), the request's path stands in for it, with
+# id-like parts replaced so requests to the same endpoint group together.
+URL_PATH_ATTRIBUTES = ("url.path", "http.target")
+URL_QUERY_SEPARATOR = "?"
+URL_PATH_SEPARATOR = "/"
+ROUTE_ID_PLACEHOLDER = ":id"
+# A number, a UUID, 16+ hex characters (e.g. a Mongo ObjectId), or a 20+ character token
+# with a digit in it.
+ID_SEGMENT_PATTERN = (
+    r"^(\d+"
+    r"|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"|[0-9a-fA-F]{16,}"
+    r"|(?=[A-Za-z_-]*\d)[A-Za-z0-9_-]{20,})$"
+)
 HTTP_STATUS_ATTRIBUTES = ("http.response.status_code", "http.status_code")
 # OTLP enum names arrive as e.g. "SPAN_KIND_SERVER" / "STATUS_CODE_ERROR"; stored without prefix.
 SPAN_KIND_PREFIX = "SPAN_KIND_"
@@ -126,6 +140,17 @@ CURSOR_SPAN_KEY = "span_id"
 NO_TRACE_DETAIL = "No trace with this id in this project in the last 30 days."
 INVALID_REQUEST_TRACE_DETAIL = "A trace id is 32 hexadecimal characters."
 TRACE_RANGE_DETAIL = "start must be within the last 30 days; older traces are gone."
+RANGE_ORDER_DETAIL = "end must be after start."
+
+# API monitoring (the APIs screen): per endpoint, speed, errors and where the time goes.
+ENDPOINT_SUMMARY_PATH = "/api/v1/endpoints/summary"
+# The busiest endpoints are listed; has_more says when there are others.
+MAX_ENDPOINTS = 200
+# A request's steps start after it does; they are looked for this far past the range's end.
+LAYER_SPAN_SLACK = timedelta(hours=1)
+QUANTILE_TYPICAL = 0.5
+QUANTILE_SLOW = 0.95
+QUANTILE_SLOWEST = 0.99
 # How a client span reads in the waterfall: another of your services answered it, or not.
 SPAN_LABEL_SERVICE_CALL = "service_call"
 SPAN_LABEL_EXTERNAL = "external"

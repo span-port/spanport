@@ -3,14 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router";
 
 import { TRACE_QUERY_KEY } from "../../../constants/api";
-import { traceLogsLink, waterfallRows } from "../../../lib/waterfall";
+import { stepTimes, traceLogsLink, waterfallRows } from "../../../lib/waterfall";
 import { useSelectedProject } from "../../projects";
 import { fetchTrace } from "../api";
 
 /**
  * The trace in the URL (/requests/:traceId) for the selected project.
  *
- * @returns The trace, its waterfall rows, the link to its logs, and loading / error state.
+ * @returns The trace, its waterfall rows, where its time went, the link to its logs, and loading / error state.
  */
 export function useTrace() {
   const { traceId = "" } = useParams();
@@ -26,6 +26,7 @@ export function useTrace() {
     traceId,
     detail,
     rows: detail ? waterfallRows(detail.spans) : [],
+    times: detail ? stepTimes(detail.spans) : null,
     logsLink:
       detail && projectId !== null
         ? traceLogsLink(projectId, detail.trace_id, detail.start_ts, detail.duration_ms)

@@ -1,5 +1,13 @@
 // The sidebar, grouped as in the PRD. Screens without a path are not built yet and show disabled.
-import { ALERTS_ROUTE, API_KEYS_ROUTE, LOGS_ROUTE, PROJECTS_ROUTE, REQUESTS_ROUTE, USERS_ROUTE } from "./ui";
+import {
+  ALERTS_ROUTE,
+  API_KEYS_ROUTE,
+  APIS_ROUTE,
+  LOGS_ROUTE,
+  PROJECTS_ROUTE,
+  REQUESTS_ROUTE,
+  USERS_ROUTE,
+} from "./ui";
 
 export interface NavItem {
   label: string;
@@ -15,7 +23,7 @@ export const NAV_GROUPS: readonly { title: string; items: readonly NavItem[] }[]
     title: "Monitor",
     items: [
       { label: "Requests", path: REQUESTS_ROUTE },
-      { label: "APIs", path: null },
+      { label: "APIs", path: APIS_ROUTE },
       { label: "Errors", path: null },
       { label: "Logs", path: LOGS_ROUTE },
       { label: "Web app", path: null },

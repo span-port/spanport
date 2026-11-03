@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import type { SpanItem } from "../features/traces/api";
 import {
+  axisTicks,
   barPosition,
   formatDuration,
   labelName,
   spanFailed,
+  stepKindName,
+  stepTimes,
   traceLink,
   traceLogsLink,
+  visibleRows,
   waterfallRows,
 } from "./waterfall";
 
@@ -49,6 +53,33 @@ describe("waterfall helpers", () => {
       "aws:2",
       "orphan:0",
     ]);
+  });
+
+  it("hides the steps below a collapsed one, and knows which steps have children", () => {
+    const rows = waterfallRows([span("root", "", 0), span("service", "root", 5), span("db", "service", 10)]);
+
+    expect(rows.map((row) => row.hasChildren)).toEqual([true, true, false]);
+    expect(visibleRows(rows, new Set(["service"])).map((row) => row.span.span_id)).toEqual(["root", "service"]);
+    expect(visibleRows(rows, new Set(["root"])).map((row) => row.span.span_id)).toEqual(["root"]);
+  });
+
+  it("adds up own time by kind of step, the request's own time counting as your code", () => {
+    const times = stepTimes([
+      { ...span("root", "", 0, 100), label: "incoming_request", self_ms: 10 },
+      { ...span("db", "root", 0, 30), label: "db" },
+      { ...span("aws", "root", 0, 40), label: "external" },
+      { ...span("billing", "root", 0, 20), label: "service_call" },
+    ]);
+
+    expect(times).toEqual({ code: 10, db: 30, external: 60, llm: 0 });
+    expect(stepKindName("external")).toBe("External calls");
+  });
+
+  it("marks the time axis in round steps", () => {
+    expect(axisTicks(885).map((tick) => tick.label)).toEqual(["0", "200 ms", "400 ms", "600 ms", "800 ms"]);
+    expect(axisTicks(4200).map((tick) => tick.label)).toEqual(["0", "1.0 s", "2.0 s", "3.0 s", "4.0 s"]);
+    expect(axisTicks(4200)[1]?.percent).toBeCloseTo(23.8, 1);
+    expect(axisTicks(0)).toEqual([{ label: "0", percent: 0 }]);
   });
 
   it("places bars as percentages, never invisible or past the end", () => {

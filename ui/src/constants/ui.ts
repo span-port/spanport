@@ -46,6 +46,7 @@ export const ALERTS_ROUTE = "/alerts";
 export const REQUESTS_ROUTE = "/requests";
 // One trace's waterfall: /requests/{trace_id}?project=...
 export const TRACE_ROUTE = "/requests/:traceId";
+export const APIS_ROUTE = "/apis";
 export const USERS_ROUTE = "/users";
 // Open to anyone with an invite link: /accept-invite?token=...
 export const ACCEPT_INVITE_ROUTE = "/accept-invite";

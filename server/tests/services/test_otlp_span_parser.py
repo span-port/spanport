@@ -10,6 +10,7 @@ from spanport_server.schemas.tenant import ProjectRef
 from spanport_server.services.otlp_span_parser import (
     decode_traces_request,
     drop_expired_spans,
+    route_from_path,
     span_category,
     to_span_rows,
 )
@@ -55,6 +56,34 @@ def test_older_http_attribute_names_are_read_too() -> None:
     row = parse_one(make_span(attributes={"http.method": "POST", "http.status_code": 201}))
 
     assert (row["http_method"], row["http_status"]) == ("POST", 201)
+
+
+def test_without_a_route_the_path_stands_in_with_ids_hidden() -> None:
+    row = parse_one(
+        make_span(
+            attributes={
+                "url.path": "/api/environments/64f1c0ffee00000000000001/components/42/variables"
+            }
+        )
+    )
+    older = parse_one(make_span(attributes={"http.target": "/users/7?page=2"}))
+
+    assert row["http_route"] == "/api/environments/:id/components/:id/variables"
+    assert older["http_route"] == "/users/:id"
+
+
+@pytest.mark.parametrize(
+    ("path", "route"),
+    [
+        ("/orders/0af76519-16cd-43dd-8448-eb211c80319c", "/orders/:id"),
+        ("/files/aB3dE5fG7hJ9kL1mN3pQ5r", "/files/:id"),
+        ("/api/v1/health", "/api/v1/health"),
+        ("/api/environments/staging", "/api/environments/staging"),
+        ("", ""),
+    ],
+)
+def test_route_from_path_hides_only_id_like_parts(path: str, route: str) -> None:
+    assert route_from_path(path) == route
 
 
 @pytest.mark.parametrize(

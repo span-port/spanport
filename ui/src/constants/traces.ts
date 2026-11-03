@@ -26,6 +26,25 @@ export const TRACE_LOGS_MARGIN_MS = 60_000;
 export const TRACE_QUERY_PREFIX = "trace:";
 
 export const WATERFALL_INDENT_PX = 16;
+// The time axis above the waterfall has at most this many marks; each is a round step
+// (1, 2 or 5 times a power of ten milliseconds).
+export const MAX_AXIS_TICKS = 5;
+export const AXIS_STEP_FACTORS = [1, 2, 5] as const;
+export const DECIMAL_BASE = 10;
+export const MS_PER_SECOND = 1000;
+// Bars grow in one after another; rows past this many start together, so a big trace isn't slow.
+export const MAX_STAGGERED_ROWS = 24;
+
+// The kinds of step a request's time is split into, in display order (APIs and waterfall).
+export const STEP_KINDS = ["code", "db", "external", "llm"] as const;
+export const EMPTY_STEP_TIMES = { code: 0, db: 0, external: 0, llm: 0 } as const;
+// The APIs list names the kind of step that takes the most time once it is at least this share.
+export const DOMINANT_STEP_PERCENT = 40;
+// Error rates below this keep one decimal ("0.4%"); larger ones are whole numbers.
+export const ONE_DECIMAL_BELOW_PERCENT = 10;
+export const NO_REQUESTS_NOTE =
+  "No requests in this range. Requests appear once your app runs the Spanport SDK (1.0 or later) with tracing on.";
+export const MORE_ENDPOINTS_NOTE = "Only the 200 busiest APIs are listed. Pick a service to see the others.";
 export const TRUNCATED_TRACE_NOTE = "This trace is very large; only its first 2,000 steps are shown.";
 // A step failed when its status is ERROR or it answered 5xx.
 export const SPAN_STATUS_ERROR = "ERROR";

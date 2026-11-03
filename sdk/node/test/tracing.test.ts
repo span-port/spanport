@@ -4,14 +4,13 @@ import { type AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
-import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
 import { InMemorySpanExporter, type ReadableSpan } from "@opentelemetry/sdk-trace";
 
 import { trace, withSpan } from "../src/spans.js";
 import { type ActiveTracing, startTracing } from "../src/tracing.js";
 
 const OWN_HOSTS = { collectorUrl: "http://127.0.0.1:4318", serverUrl: "http://127.0.0.1:8000" };
-const NOTHING_INSTALLED = (): undefined => undefined;
+const UNDICI_SCOPE = "@opentelemetry/instrumentation-undici";
 
 describe("tracing", () => {
   let exporter: InMemorySpanExporter;
@@ -24,7 +23,7 @@ describe("tracing", () => {
 
   beforeEach(() => {
     exporter = new InMemorySpanExporter();
-    tracing = startTracing("orders-api", exporter, OWN_HOSTS, NOTHING_INSTALLED);
+    tracing = startTracing("orders-api", exporter, OWN_HOSTS);
   });
 
   afterEach(async () => {
@@ -128,12 +127,10 @@ describe("tracing", () => {
     await tracing.stop();
     // The same server now playing Spanport's collector: calls to it are the SDK's own.
     exporter = new InMemorySpanExporter();
-    tracing = startTracing(
-      "orders-api",
-      exporter,
-      { ...OWN_HOSTS, collectorUrl: `http://127.0.0.1:${String(port)}` },
-      NOTHING_INSTALLED,
-    );
+    tracing = startTracing("orders-api", exporter, {
+      ...OWN_HOSTS,
+      collectorUrl: `http://127.0.0.1:${String(port)}`,
+    });
     await get("/v1/traces");
     server.close();
     const ownKinds = (await finished()).map((span) => span.kind);
@@ -164,13 +161,21 @@ describe("tracing", () => {
     assert.match(received ?? "", new RegExp(`^00-${checkout.spanContext().traceId}-[0-9a-f]{16}-01$`));
   });
 
-  it("switches on optional instrumentations the app has installed, and only those", async () => {
+  it("times fetch calls out of the box, but never the SDK's own", async () => {
+    const server = http.createServer((_request, response) => response.end("ok"));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`;
+
+    await (await fetch(`${origin}/rates`)).text();
+    const appScopes = (await finished()).map((span) => span.instrumentationScope.name);
     await tracing.stop();
+    exporter = new InMemorySpanExporter();
+    tracing = startTracing("orders-api", exporter, { ...OWN_HOSTS, serverUrl: origin });
+    await (await fetch(`${origin}/api/v1/api-keys/current`)).text();
+    server.close();
+    const ownScopes = (await finished()).map((span) => span.instrumentationScope.name);
 
-    tracing = startTracing("orders-api", exporter, OWN_HOSTS, (name) =>
-      name === "@opentelemetry/instrumentation-express" ? { ExpressInstrumentation: HttpInstrumentation } : undefined,
-    );
-
-    assert.deepEqual(tracing.optional, ["@opentelemetry/instrumentation-express"]);
+    assert.ok(appScopes.includes(UNDICI_SCOPE));
+    assert.ok(!ownScopes.includes(UNDICI_SCOPE));
   });
 });

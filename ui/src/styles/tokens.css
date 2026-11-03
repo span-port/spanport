@@ -44,6 +44,22 @@
   --level-debug-bg: #232931;
   --level-debug-fg: #7c8796;
 
+  /* Kinds of step in a request (waterfall bars, APIs "where time goes"), from the UI canvas */
+  --step-code: #4a5361;
+  --step-db: #1f7a70;
+  --step-external: #3fc1b1;
+  --step-llm: #d98e3a;
+  --step-code-text: #aeb6c2;
+  --step-db-text: #5cc8bb;
+  --step-external-text: #8fddd3;
+  --step-llm-text: #f2c27a;
+  --step-external-soft: #123a36;
+
+  /* Motion: waterfall bars grow in from where they start, one row after another */
+  --motion-bar: 520ms;
+  --motion-row-delay: 22ms;
+  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
   /* Type scale: base 14 px, ratio about 1.25 */
   --text-xs: 12px;
   --text-sm: 13px;
@@ -79,6 +95,11 @@
   --log-columns-no-trace: 150px 64px 150px minmax(0, 1fr);
   /* Request lines: method, path, status, duration inside the message column */
   --request-columns: 64px minmax(0, 1fr) 48px 72px;
+  /* Waterfall: step names, the timeline, the duration */
+  --waterfall-columns: minmax(240px, 300px) minmax(0, 1fr) 76px;
+  --waterfall-min-width: 760px;
+  --details-width: 320px;
+  --duration-bar-width: 72px;
   --log-details-indent: 210px;
   --log-scroll-height: 70vh;
   --dropdown-width: 380px;

@@ -17,6 +17,7 @@ from spanport_server.schemas.alert import (
 )
 from spanport_server.schemas.api_key import ApiKeyRecord, KeyType, Scope
 from spanport_server.schemas.auth import Caller, Role, UserRecord
+from spanport_server.schemas.endpoint import EndpointQuery, EndpointRow, TotalsRow
 from spanport_server.schemas.log_row import LogRow
 from spanport_server.schemas.log_search import LogItem, LogPosition, LogQuery
 from spanport_server.schemas.span_row import SpanRow
@@ -605,6 +606,22 @@ class FakeSpanWriter:
         if self.storage_down:
             raise StorageUnavailableError("Log storage is unavailable. Retry later.")
         self.rows.extend(rows)
+
+
+class FakeEndpointStatsStore:
+    """Per-endpoint sums handed out as set; records each query."""
+
+    def __init__(self) -> None:
+        self.rows: list[EndpointRow] = []
+        self.totals = TotalsRow(requests=0, errors=0, p95_ns=0)
+        self.queries: list[EndpointQuery] = []
+
+    async def endpoint_rows(self, query: EndpointQuery, limit: int) -> list[EndpointRow]:
+        self.queries.append(query)
+        return self.rows[:limit]
+
+    async def endpoint_totals(self, query: EndpointQuery) -> TotalsRow:
+        return self.totals
 
 
 class FakeSpanSearchStore:

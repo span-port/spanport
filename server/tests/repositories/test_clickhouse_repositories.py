@@ -5,11 +5,13 @@ import pytest
 from clickhouse_connect.driver.asyncclient import AsyncClient
 
 from spanport_server.core.ids import UuidV7, new_id
+from spanport_server.repositories.clickhouse.endpoint_repository import EndpointRepository
 from spanport_server.repositories.clickhouse.log_repository import LogRepository
 from spanport_server.repositories.clickhouse.project_data_repository import ProjectDataRepository
 from spanport_server.repositories.clickhouse.schema_repository import ClickHouseSchemaRepository
 from spanport_server.repositories.clickhouse.span_repository import SpanRepository
 from spanport_server.repositories.clickhouse.span_search_repository import SpanSearchRepository
+from spanport_server.schemas.endpoint import EndpointQuery
 from spanport_server.schemas.log_row import LogRow
 from spanport_server.schemas.span_row import SpanRow
 from spanport_server.schemas.trace import RequestQuery
@@ -127,6 +129,47 @@ async def test_request_search_filters_and_a_trace_reads_back(
     ]
     assert too_slow == []
     assert {span.category for span in trace} == {"incoming_request", "db"}
+
+
+async def test_endpoint_sums_split_the_time_by_kind_of_step(
+    clickhouse_client: AsyncClient,
+) -> None:
+    schema = ClickHouseSchemaRepository(clickhouse_client)
+    for version in schema.available_versions():
+        await schema.apply(version)
+    org_id, project_id = new_id(), new_id()
+    request = sample_span("GET /users/:id", org_id, project_id)
+    database = replace(
+        request,
+        span_id="00f067aa0ba902b7",
+        parent_span_id=request.span_id,
+        kind="CLIENT",
+        category="db",
+        duration_ns=10_000_000,
+    )
+    outgoing = replace(
+        database, span_id="00f067aa0ba902b8", category="client", duration_ns=20_000_000
+    )
+    # A call inside the outgoing one (e.g. its retry): already part of its 20 ms.
+    nested = replace(outgoing, span_id="00f067aa0ba902b9", parent_span_id=outgoing.span_id)
+    await SpanRepository(clickhouse_client).insert_spans([request, database, outgoing, nested])
+    query = EndpointQuery(
+        org_id=org_id,
+        project_id=project_id,
+        start=datetime.now(UTC) - timedelta(hours=1),
+        end=datetime.now(UTC) + timedelta(minutes=1),
+        service="",
+    )
+    endpoints = EndpointRepository(clickhouse_client)
+
+    (row,) = await endpoints.endpoint_rows(query, 10)
+    totals = await endpoints.endpoint_totals(query)
+    other_service = await endpoints.endpoint_rows(replace(query, service="billing"), 10)
+
+    assert (row.route, row.requests, row.errors, row.total_ns) == ("/users/:id", 1, 1, 42_000_000)
+    assert (row.db_ns, row.external_ns, row.llm_ns) == (10_000_000, 20_000_000, 0)
+    assert (totals.requests, totals.errors) == (1, 1)
+    assert other_service == []
 
 
 def sample_span(name: str, org_id: UuidV7, project_id: UuidV7) -> SpanRow:

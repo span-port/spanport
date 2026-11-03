@@ -141,7 +141,6 @@ function start(options: SpanportOptions): void {
   active = { provider, logger, restoreConsole, tracing };
   installExitFlush();
   sdkInfo(`sending logs${tracing ? " and traces" : ""} for service ${options.service} to ${collectorUrl}`);
-  if (tracing?.optional.length) sdkInfo(`also timing: ${tracing.optional.join(", ")}`);
   if (options.checkKey !== false) {
     void checkDataKey(serverUrl, options.dataKey);
   }

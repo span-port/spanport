@@ -13,6 +13,7 @@ from spanport_server.controllers import (
     alert_controller,
     api_key_controller,
     auth_controller,
+    endpoint_controller,
     health_controller,
     log_export_controller,
     log_search_controller,
@@ -95,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(alert_controller.router)
     app.include_router(team_controller.router)
     app.include_router(trace_controller.router)
+    app.include_router(endpoint_controller.router)
     return app
 
 

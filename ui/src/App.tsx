@@ -8,6 +8,7 @@ import {
   ALERTS_ROUTE,
   ANY_ROUTE,
   API_KEYS_ROUTE,
+  APIS_ROUTE,
   LOGIN_ROUTE,
   LOGS_ROUTE,
   PROJECTS_ROUTE,
@@ -19,6 +20,7 @@ import {
 import { AlertsPage } from "./features/alerts";
 import { ApiKeysPage } from "./features/apiKeys";
 import { AcceptInvitePage, LoginPage, SetupPage, useCurrentUser } from "./features/auth";
+import { ApisPage } from "./features/endpoints";
 import { LogsPage } from "./features/logs";
 import { ProjectsPage } from "./features/projects";
 import { TeamPage } from "./features/team";
@@ -76,6 +78,7 @@ function SignedInApp() {
           <Route path={ALERTS_ROUTE} element={<AlertsPage />} />
           <Route path={REQUESTS_ROUTE} element={<RequestsPage />} />
           <Route path={TRACE_ROUTE} element={<TracePage />} />
+          <Route path={APIS_ROUTE} element={<ApisPage />} />
           <Route
             path={USERS_ROUTE}
             element={

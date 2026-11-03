@@ -1,7 +1,7 @@
 // The Requests list: filters in the URL, results newest first, more on scroll.
 import { skipToken, useInfiniteQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { useSearchParams } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 
 import { TRACE_SEARCH_QUERY_KEY } from "../../../constants/api";
 import {
@@ -15,6 +15,7 @@ import {
   URL_PARAM_ROUTE,
   URL_PARAM_SERVICE,
 } from "../../../constants/traces";
+import { traceLink } from "../../../lib/waterfall";
 import { useSelectedProject } from "../../projects";
 import { searchRequests, type RequestSearch } from "../api";
 
@@ -55,11 +56,13 @@ function writeFilters(current: URLSearchParams, filters: RequestFilters): URLSea
 /**
  * The project's incoming requests for the filters in the URL.
  *
- * @returns The rows, the filters and `change` to update them, loading state, `loadMore` and errors.
+ * @returns The rows and the slowest of them, `linkTo` / `open` for a row's waterfall, the filters and
+ *   `change` to update them, loading state, `loadMore` and errors.
  */
 export function useRequests() {
   const { selected } = useSelectedProject();
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const filters = readFilters(params);
   // "Now" is taken when the filters change, so scrolling for more never shifts the window.
   const [endsAtMs, setEndsAtMs] = useState(Date.now);
@@ -86,8 +89,14 @@ export function useRequests() {
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.next_cursor,
   });
+  const rows = results.data?.pages.flatMap((page) => page.data) ?? [];
   return {
     projectId: selected?.id ?? null,
+    /** The waterfall page of one request (the whole row opens it, not just the link). */
+    linkTo: (traceId: string) => traceLink(traceId, selected?.id ?? ""),
+    open: (traceId: string) => {
+      void navigate(traceLink(traceId, selected?.id ?? ""));
+    },
     filters,
     change: (patch: Partial<RequestFilters>) => {
       setParams((current) => writeFilters(current, { ...filters, ...patch }));
@@ -96,7 +105,9 @@ export function useRequests() {
     refresh: () => {
       setEndsAtMs(Date.now());
     },
-    rows: results.data?.pages.flatMap((page) => page.data) ?? [],
+    rows,
+    // The slowest request listed, so each row's duration bar is in proportion to it.
+    slowestMs: Math.max(0, ...rows.map((row) => row.duration_ms)),
     loading: results.isPending && search !== null,
     hasMore: results.hasNextPage,
     loadMore: () => {
