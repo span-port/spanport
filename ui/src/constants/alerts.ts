@@ -21,6 +21,12 @@ export const ALERT_NAME_MESSAGE = "Give the alert a name.";
 export const ALERT_THRESHOLD_MESSAGE = `Enter a whole number from 0 to ${MAX_ALERT_THRESHOLD.toLocaleString("en")}.`;
 export const ALERT_EMAIL_INVALID_MESSAGE = "This isn't an email address:";
 export const TEST_SENT_HINT = "Check the inbox (and spam) of each address.";
+export const ALERT_LIFECYCLE_HINT =
+  "An alert stays open until someone resolves it with a note. When its logs go back within the rule it is " +
+  "marked Back to normal (and emailed), and it fires again if they break the rule before anyone resolves it.";
+export const RESOLUTION_NOTE_PLACEHOLDER = "What did you find, and what did you do? e.g. Expired AWS key, rotated it.";
+export const MAX_RESOLUTION_NOTE_LENGTH = 2000;
+export const UNASSIGNED_LABEL = "Nobody yet";
 
 // Ready-made searches, so nobody needs the query syntax for the common alerts.
 export const ALERT_SEARCH_PRESETS = [

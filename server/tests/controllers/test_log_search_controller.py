@@ -7,8 +7,11 @@ from fakes import (
     SAMPLE_ADMIN_KEY,
     SAMPLE_DATA_KEY,
     FakeApiKeyStore,
+    FakeEndpointDetailStore,
     FakeEndpointStatsStore,
+    FakeErrorStore,
     FakeLogSearchStore,
+    FakeServiceMapStore,
     FakeSessionStore,
     FakeSpanSearchStore,
     FakeTenantStore,
@@ -19,9 +22,12 @@ from spanport_server.core.ids import new_id
 from spanport_server.dependencies import (
     get_api_key_auth_service,
     get_auth_service,
+    get_endpoint_detail_service,
     get_endpoint_service,
+    get_error_service,
     get_log_export_service,
     get_log_search_service,
+    get_service_map_service,
     get_trace_service,
 )
 from spanport_server.main import create_app
@@ -29,9 +35,12 @@ from spanport_server.schemas.api_key import KeyType, Scope
 from spanport_server.schemas.tenant import ProjectRef
 from spanport_server.services.api_key_auth_service import ApiKeyAuthService
 from spanport_server.services.auth_service import AuthService
+from spanport_server.services.endpoint_detail_service import EndpointDetailService
 from spanport_server.services.endpoint_service import EndpointService
+from spanport_server.services.error_service import ErrorService
 from spanport_server.services.log_export_service import LogExportService
 from spanport_server.services.log_search_service import LogSearchService
+from spanport_server.services.service_map_service import ServiceMapService
 from spanport_server.services.trace_service import TraceService
 
 pytestmark = pytest.mark.anyio
@@ -91,6 +100,13 @@ async def setup() -> AsyncIterator[Setup]:
     app.dependency_overrides[get_endpoint_service] = lambda: EndpointService(
         tenants, FakeEndpointStatsStore()
     )
+    app.dependency_overrides[get_endpoint_detail_service] = lambda: EndpointDetailService(
+        tenants, FakeEndpointDetailStore()
+    )
+    app.dependency_overrides[get_error_service] = lambda: ErrorService(tenants, FakeErrorStore())
+    app.dependency_overrides[get_service_map_service] = lambda: ServiceMapService(
+        tenants, FakeServiceMapStore()
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield Setup(client, project)
@@ -124,13 +140,61 @@ async def test_endpoint_summary_needs_a_reader_and_a_valid_body(setup: Setup) ->
     unauthenticated = await setup.post("/api/v1/endpoints/summary", setup.body(), key=None)
 
     assert summary.json() == {
-        "totals": {"requests": 0, "errors": 0, "p95_ms": 0},
+        "totals": {"requests": 0, "errors": 0, "p95_ms": 0, "previous_p95_ms": None},
         "data": [],
+        "slow_queries": [],
         "next_cursor": None,
         "has_more": False,
     }
     assert unknown_field.status_code == 400
     assert unauthenticated.status_code == 401
+
+
+async def test_endpoint_detail_needs_a_route_and_answers_for_a_quiet_endpoint(
+    setup: Setup,
+) -> None:
+    path = "/api/v1/endpoints/detail"
+    body = setup.body(service="api", http_method="GET", route="/users/:id")
+
+    detail = await setup.post(path, body)
+    no_route = await setup.post(path, setup.body(service="api"))
+
+    assert detail.json() == {
+        "summary": None,
+        "bucket_seconds": 60,
+        "timeline": [],
+        "statuses": [],
+        "steps": [],
+        "slowest": [],
+    }
+    assert no_route.status_code == 400
+
+
+async def test_errors_summary_and_window_need_a_reader_and_a_valid_body(setup: Setup) -> None:
+    summary = await setup.post("/api/v1/errors/summary", setup.body())
+    window = await setup.post("/api/v1/errors/window", setup.body(show="5xx"))
+    bad_show = await setup.post("/api/v1/errors/window", setup.body(show="3xx"))
+    route_alone = await setup.post("/api/v1/errors/summary", setup.body(route="/users/:id"))
+    unauthenticated = await setup.post("/api/v1/errors/summary", setup.body(), key=None)
+
+    assert summary.json() == {
+        "bucket_seconds": 60,
+        "buckets": [],
+        "totals": {"requests": 0, "client_errors": 0, "server_errors": 0, "worst_server": None},
+        "apis": [],
+    }
+    assert window.json() == {"total": 0, "groups": [], "requests": []}
+    assert [bad_show.status_code, route_alone.status_code] == [400, 400]
+    assert unauthenticated.status_code == 401
+
+
+async def test_service_map_needs_a_reader_and_a_valid_body(setup: Setup) -> None:
+    mapped = await setup.post("/api/v1/service-map", setup.body())
+    unknown_field = await setup.post("/api/v1/service-map", setup.body(service="api"))
+    unauthenticated = await setup.post("/api/v1/service-map", setup.body(), key=None)
+
+    assert mapped.json() == {"range_seconds": 3600.0, "nodes": [], "edges": []}
+    assert [unknown_field.status_code, unauthenticated.status_code] == [400, 401]
 
 
 async def test_export_downloads_a_named_file(setup: Setup) -> None:

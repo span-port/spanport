@@ -28,6 +28,8 @@ export const ALERT_SETTINGS_PATH = "/api/v1/alert-settings";
 export const TEST_SUFFIX = "/test";
 export const ACKNOWLEDGE_SUFFIX = "/acknowledge";
 export const RESOLVE_SUFFIX = "/resolve";
+export const ASSIGN_SUFFIX = "/assign";
+export const ALERT_ASSIGNEES_PATH = "/api/v1/alert-assignees";
 // The server's maximum page size; one page holds a project's rules and recent alerts for now.
 export const ALERTS_PAGE_SIZE = 500;
 export const LOG_SEARCH_PATH = "/api/v1/logs/search";
@@ -38,6 +40,11 @@ export const TRACE_SEARCH_PATH = "/api/v1/traces/search";
 // GET {TRACES_PATH}/{trace_id}?project_id=...
 export const TRACES_PATH = "/api/v1/traces";
 export const ENDPOINT_SUMMARY_PATH = "/api/v1/endpoints/summary";
+export const ENDPOINT_DETAIL_PATH = "/api/v1/endpoints/detail";
+export const ERROR_SUMMARY_PATH = "/api/v1/errors/summary";
+export const ERROR_WINDOW_PATH = "/api/v1/errors/window";
+export const SERVICE_MAP_PATH = "/api/v1/service-map";
+export const STORAGE_PATH = "/api/v1/storage";
 export const CONTENT_DISPOSITION_HEADER = "Content-Disposition";
 
 // The server sets this cookie at sign-in; requests that change something echo it in the header.
@@ -73,9 +80,15 @@ export const ALERT_RULES_QUERY_KEY = "alert-rules";
 export const ALERT_EVENTS_QUERY_KEY = "alert-events";
 export const ALERT_PREVIEW_QUERY_KEY = "alert-preview";
 export const ALERT_SETTINGS_QUERY_KEY = "alert-settings";
+export const ALERT_ASSIGNEES_QUERY_KEY = "alert-assignees";
 export const USERS_QUERY_KEY = "users";
 export const TRACE_SEARCH_QUERY_KEY = "trace-search";
 export const ENDPOINT_SUMMARY_QUERY_KEY = "endpoint-summary";
+export const ENDPOINT_DETAIL_QUERY_KEY = "endpoint-detail";
+export const ERROR_SUMMARY_QUERY_KEY = "error-summary";
+export const ERROR_WINDOW_QUERY_KEY = "error-window";
+export const SERVICE_MAP_QUERY_KEY = "service-map";
+export const STORAGE_QUERY_KEY = "storage";
 export const TRACE_QUERY_KEY = "trace";
 export const INVITES_QUERY_KEY = "invites";
 export const INVITE_DETAILS_QUERY_KEY = "invite-details";

@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { MAX_STAGGERED_ROWS, WATERFALL_INDENT_PX } from "../../../constants/traces";
 import {
   axisTicks,
+  tickEdge,
   barPosition,
   formatDuration,
   labelName,
@@ -35,7 +36,12 @@ export function Waterfall({ traceId, totalMs, rows, selectedId, onSelect, onTogg
           <span>Step</span>
           <span className="waterfall-axis">
             {ticks.map((tick) => (
-              <span key={tick.label} className="waterfall-tick" style={{ left: `${String(tick.percent)}%` }}>
+              <span
+                key={tick.label}
+                className="waterfall-tick"
+                data-edge={tickEdge(tick.percent)}
+                style={{ left: `${String(tick.percent)}%` }}
+              >
                 {tick.label}
               </span>
             ))}

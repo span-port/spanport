@@ -55,6 +55,11 @@
   --step-llm-text: #f2c27a;
   --step-external-soft: #123a36;
 
+  /* Service map boxes: border when healthy, background when slow or failing (UI canvas) */
+  --map-ok-border: #1f4d33;
+  --map-slow-bg: #2a2010;
+  --map-bad-bg: #2a1614;
+
   /* Motion: waterfall bars grow in from where they start, one row after another */
   --motion-bar: 520ms;
   --motion-row-delay: 22ms;

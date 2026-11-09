@@ -16,14 +16,14 @@ from spanport_server.core.ids import UuidV7
 from spanport_server.schemas.alert import AlertRuleRecord, OpenAlert
 from spanport_server.schemas.log_search import LogQuery
 from spanport_server.schemas.tenant import ProjectItem
-from spanport_server.services.alert_email import AlertEmail, fired_email, resolved_email
+from spanport_server.services.alert_email import AlertEmail, back_to_normal_email, fired_email
 from spanport_server.services.alert_notifier import AlertNotifier
 from spanport_server.services.alert_rule_service import ProjectFinder
 from spanport_server.services.log_query_parser import parse_query
 
 logger = logging.getLogger(__name__)
 
-# fired_email or resolved_email: (rule, project, matched lines, time, UI address) -> the email
+# fired_email or back_to_normal_email: (rule, project, matched lines, time, UI address) -> email
 type MessageBuilder = Callable[
     [AlertRuleRecord, ProjectItem, int, datetime, str | None], AlertEmail
 ]
@@ -44,7 +44,7 @@ class DueRuleClaimer(Protocol):
 
 
 class OpenAlertStore(Protocol):
-    """A rule's open alert: find, open and resolve it."""
+    """A rule's open alert: find it, open it, and note when its logs recover or break again."""
 
     async def find_open(self, org_id: UuidV7, rule_id: UuidV7) -> OpenAlert | None:
         """The rule's firing or acknowledged alert, or None."""
@@ -56,10 +56,14 @@ class OpenAlertStore(Protocol):
         """A new firing alert, or None when one is already open."""
         ...
 
-    async def resolve(
-        self, org_id: UuidV7, event_id: UuidV7, resolved_by: UuidV7 | None, now: datetime
+    async def mark_recovered(self, org_id: UuidV7, event_id: UuidV7, now: datetime) -> bool:
+        """Note the open alert is back to normal; False when it already was."""
+        ...
+
+    async def mark_breaking_again(
+        self, org_id: UuidV7, event_id: UuidV7, matched_count: int
     ) -> bool:
-        """Resolve an open alert; False when none matches."""
+        """Note the open alert broke its rule again; False when it wasn't back to normal."""
         ...
 
 
@@ -73,7 +77,8 @@ class LogCounter(Protocol):
 
 class AlertCheckService:
     """For each due rule: more than `threshold` matching lines in the window opens an alert
-    and emails it; back within the limit resolves it and emails that.
+    and emails it. Back within the limit marks it back to normal and emails that, but only a
+    person resolves it; breaking the rule again before then emails Firing again.
     """
 
     def __init__(
@@ -131,8 +136,10 @@ class AlertCheckService:
         breaking = matched > rule.threshold
         if breaking and open_alert is None:
             await self._fire(rule, matched, now)
-        elif not breaking and open_alert is not None:
-            await self._resolve(rule, open_alert, matched, now)
+        elif breaking and open_alert is not None and open_alert.recovered_at is not None:
+            await self._fire_again(rule, open_alert, matched, now)
+        elif not breaking and open_alert is not None and open_alert.recovered_at is None:
+            await self._recover(rule, open_alert, matched, now)
         logger.info(
             "alert rule checked rule=%s project=%s matched=%d threshold=%d firing=%s",
             rule.id,
@@ -168,13 +175,23 @@ class AlertCheckService:
         )
         await self._email(rule, fired_email, matched, alert.fired_at)
 
-    async def _resolve(
+    async def _fire_again(
         self, rule: AlertRuleRecord, alert: OpenAlert, matched: int, now: datetime
     ) -> None:
-        if not await self._alerts.resolve(rule.org_id, alert.id, None, now):
+        """The open alert had gone back to normal and breaks its rule again: email Firing."""
+        if not await self._alerts.mark_breaking_again(rule.org_id, alert.id, matched):
             return
-        logger.info("alert resolved itself rule=%s alert=%s matched=%d", rule.id, alert.id, matched)
-        await self._email(rule, resolved_email, matched, now)
+        logger.warning("alert firing again rule=%s alert=%s matched=%d", rule.id, alert.id, matched)
+        await self._email(rule, fired_email, matched, now)
+
+    async def _recover(
+        self, rule: AlertRuleRecord, alert: OpenAlert, matched: int, now: datetime
+    ) -> None:
+        """Back within the rule: noted and emailed, but the alert waits for a person."""
+        if not await self._alerts.mark_recovered(rule.org_id, alert.id, now):
+            return
+        logger.info("alert back to normal rule=%s alert=%s matched=%d", rule.id, alert.id, matched)
+        await self._email(rule, back_to_normal_email, matched, now)
 
     async def _email(
         self, rule: AlertRuleRecord, build_message: MessageBuilder, matched: int, at: datetime

@@ -30,9 +30,11 @@ class AlertRule(Base):
 
 
 class AlertEvent(Base):
-    """One alert: firing, then acknowledged (someone is on it), then resolved.
+    """One alert: firing, then acknowledged (someone is on it), then resolved by a person.
 
-    `created_at` is when it fired. A resolved alert with no `resolved_by` resolved itself.
+    `created_at` is when it fired; `recovered_at` when its logs went back within the rule (the
+    alert stays open until someone resolves it, with an optional `resolution_note`). Alerts
+    resolved before migration 0010 may have no `resolved_by`: they closed themselves.
     """
 
     __tablename__ = "alert_events"
@@ -51,3 +53,8 @@ class AlertEvent(Base):
     resolved_by: Mapped[UuidV7 | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
+    assigned_to: Mapped[UuidV7 | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    recovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution_note: Mapped[str | None]

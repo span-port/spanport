@@ -7,9 +7,10 @@ Same rules as the Requests screen: own org, projects the caller may see, a range
 
 import logging
 import time
+from dataclasses import replace
 from typing import Protocol
 
-from spanport_server.core.constants import MAX_ENDPOINTS, NANOS_PER_MILLISECOND
+from spanport_server.core.constants import MAX_ENDPOINTS, MAX_SLOW_QUERIES, NANOS_PER_MILLISECOND
 from spanport_server.schemas.auth import Caller
 from spanport_server.schemas.endpoint import (
     EndpointLayers,
@@ -19,6 +20,8 @@ from spanport_server.schemas.endpoint import (
     EndpointSummaryRequest,
     EndpointSummaryResponse,
     EndpointTotals,
+    QueryRow,
+    SlowQuery,
     TotalsRow,
 )
 from spanport_server.services.log_search_service import ProjectLookup
@@ -37,6 +40,33 @@ class EndpointStatsStore(Protocol):
     async def endpoint_totals(self, query: EndpointQuery) -> TotalsRow:
         """Every request in the range: count, failures and the slow-5% time."""
         ...
+
+    async def slow_queries(self, query: EndpointQuery, limit: int) -> list[QueryRow]:
+        """The database queries with the most total time, per endpoint."""
+        ...
+
+
+type EndpointKey = tuple[str, str, str]
+
+
+def endpoint_key(row: EndpointRow | QueryRow) -> EndpointKey:
+    """Service, method and route: what names one endpoint."""
+    return (row.service, row.http_method, row.route)
+
+
+def slow_query(row: QueryRow) -> SlowQuery:
+    """One database query in milliseconds, with how many times a request runs it."""
+    return SlowQuery(
+        statement=row.statement,
+        service=row.service,
+        http_method=row.http_method,
+        route=row.route,
+        calls=row.calls,
+        calls_per_request=row.calls / row.requests if row.requests else 0.0,
+        avg_ms=as_ms(row.avg_ns),
+        p95_ms=as_ms(row.p95_ns),
+        total_ms=as_ms(row.total_ns),
+    )
 
 
 def as_ms(nanoseconds: float) -> float:
@@ -61,9 +91,10 @@ def average_layers(row: EndpointRow) -> EndpointLayers:
     )
 
 
-def endpoint_stats(row: EndpointRow) -> EndpointStats:
-    """One endpoint as the API shows it, in milliseconds."""
+def endpoint_stats(row: EndpointRow, previous_p95_ns: float | None = None) -> EndpointStats:
+    """One endpoint as the API shows it, in milliseconds, with its slow-5% time just before."""
     return EndpointStats(
+        previous_p95_ms=as_ms(previous_p95_ns) if previous_p95_ns is not None else None,
         service=row.service,
         http_method=row.http_method,
         route=row.route,
@@ -93,7 +124,9 @@ class EndpointService:
     async def summary(
         self, caller: Caller, request: EndpointSummaryRequest
     ) -> EndpointSummaryResponse:
-        """The project's totals and its busiest endpoints in the range.
+        """The project's totals and its busiest endpoints in the range, each with its slow-5%
+        time in the period of the same length just before (to show what changed), and the
+        database queries with the most total time.
 
         Raises:
             NotFoundError: The project isn't in the caller's org or not visible to them.
@@ -112,6 +145,14 @@ class EndpointService:
         )
         rows = await self._stats.endpoint_rows(query, MAX_ENDPOINTS + 1)
         totals = await self._stats.endpoint_totals(query)
+        # Before: the same length just before the range (it may reach past retention: fewer rows).
+        before = replace(query, start=start - (end - start), end=start)
+        previous_p95 = {
+            endpoint_key(row): row.p95_ns
+            for row in await self._stats.endpoint_rows(before, MAX_ENDPOINTS + 1)
+        }
+        previous_totals = await self._stats.endpoint_totals(before)
+        queries = await self._stats.slow_queries(query, MAX_SLOW_QUERIES)
         listed = rows[:MAX_ENDPOINTS]
         logger.info(
             "endpoint summary %s project=%s range_minutes=%d service=%s endpoints=%d "
@@ -126,8 +167,12 @@ class EndpointService:
         )
         return EndpointSummaryResponse(
             totals=EndpointTotals(
-                requests=totals.requests, errors=totals.errors, p95_ms=as_ms(totals.p95_ns)
+                requests=totals.requests,
+                errors=totals.errors,
+                p95_ms=as_ms(totals.p95_ns),
+                previous_p95_ms=as_ms(previous_totals.p95_ns) if previous_totals.requests else None,
             ),
-            data=[endpoint_stats(row) for row in listed],
+            data=[endpoint_stats(row, previous_p95.get(endpoint_key(row))) for row in listed],
+            slow_queries=[slow_query(row) for row in queries],
             has_more=len(rows) > MAX_ENDPOINTS,
         )

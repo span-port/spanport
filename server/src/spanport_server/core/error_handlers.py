@@ -8,8 +8,10 @@ from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import ClientDisconnect
 
 from spanport_server.core.constants import (
+    CLIENT_CLOSED_REQUEST_STATUS,
     PROBLEM_CONTENT_TYPE,
     PROBLEM_TYPE_DEFAULT,
     REQUEST_ID_HEADER,
@@ -96,6 +98,16 @@ def install_error_handlers(app: FastAPI) -> None:
         """Return framework errors (unknown route, wrong method) as problem+json."""
         status = HTTPStatus(error.status_code)
         return problem_response(status, status.phrase.lower().replace(" ", "_"), str(error.detail))
+
+    @app.exception_handler(ClientDisconnect)
+    async def handle_client_disconnect(request: Request, error: ClientDisconnect) -> Response:
+        """The browser cancelled the request (the UI drops searches it no longer needs when
+        filters or pages change). Nobody is waiting for an answer, so this isn't an error.
+        """
+        logger.info(
+            "request cancelled by the client method=%s path=%s", request.method, request.url.path
+        )
+        return Response(status_code=CLIENT_CLOSED_REQUEST_STATUS)
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, error: Exception) -> JSONResponse:

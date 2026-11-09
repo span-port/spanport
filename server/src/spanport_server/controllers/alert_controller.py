@@ -1,5 +1,5 @@
 """Log alerts: everyone signed in sees a project's rules and alerts; owners and admins manage
-rules; owners, admins and members acknowledge and resolve alerts.
+rules; owners, admins and members acknowledge, assign and resolve alerts.
 """
 
 from http import HTTPStatus
@@ -9,10 +9,12 @@ from fastapi import APIRouter, Depends, Header, Query, Request
 
 from spanport_server.core.constants import (
     ACKNOWLEDGE_ALERT_EVENT_PATH,
+    ALERT_ASSIGNEES_PATH,
     ALERT_EVENTS_PATH,
     ALERT_RULE_PATH,
     ALERT_RULES_PATH,
     ALERT_SETTINGS_PATH,
+    ASSIGN_ALERT_EVENT_PATH,
     DEFAULT_ALERTS_LIMIT,
     MAX_ALERT_BODY_BYTES,
     MAX_ALERTS_LIMIT,
@@ -33,7 +35,10 @@ from spanport_server.schemas.alert import (
     AlertLimits,
     AlertRuleItem,
     AlertRuleListResponse,
+    AssignAlertRequest,
+    AssigneeListResponse,
     CreateAlertRuleRequest,
+    ResolveAlertRequest,
     UpdateAlertRuleRequest,
 )
 from spanport_server.schemas.auth import Caller
@@ -172,15 +177,51 @@ async def acknowledge_event(
     await event_service.acknowledge(caller, event_id)
 
 
+@router.post(ASSIGN_ALERT_EVENT_PATH, status_code=HTTPStatus.NO_CONTENT)
+async def assign_event(
+    event_id: UuidV7,
+    request: Request,
+    caller: Annotated[Caller, Depends(require_responder)],
+    event_service: Annotated[AlertEventService, Depends(get_alert_event_service)],
+    content_type: Annotated[str, Header()] = "",
+) -> None:
+    """Give an open alert to someone (`{"user_id": ...}`); they are emailed.
+
+    Raises:
+        NotSignedInError (401), NotAllowedError / CsrfError (403), NotFoundError (404),
+        InvalidRequestError: bad body or a person who can't take this alert (400).
+    """
+    body = await parse_json_body(request, content_type, AssignAlertRequest, MAX_ALERT_BODY_BYTES)
+    await event_service.assign(caller, event_id, body.user_id)
+
+
 @router.post(RESOLVE_ALERT_EVENT_PATH, status_code=HTTPStatus.NO_CONTENT)
 async def resolve_event(
     event_id: UuidV7,
+    request: Request,
     caller: Annotated[Caller, Depends(require_responder)],
     event_service: Annotated[AlertEventService, Depends(get_alert_event_service)],
+    content_type: Annotated[str, Header()] = "",
 ) -> None:
-    """Resolve an open alert by hand.
+    """Resolve an open alert, with a note on what was found (`{"note": "..."}`, may be empty).
 
     Raises:
-        NotSignedInError (401), NotAllowedError / CsrfError (403), NotFoundError (404).
+        NotSignedInError (401), NotAllowedError / CsrfError (403), NotFoundError (404),
+        InvalidRequestError: bad body (400).
     """
-    await event_service.resolve(caller, event_id)
+    body = await parse_json_body(request, content_type, ResolveAlertRequest, MAX_ALERT_BODY_BYTES)
+    await event_service.resolve(caller, event_id, body.note)
+
+
+@router.get(ALERT_ASSIGNEES_PATH)
+async def list_assignees(
+    project_id: Annotated[UuidV7, Query()],
+    caller: Annotated[Caller, Depends(require_signed_in)],
+    event_service: Annotated[AlertEventService, Depends(get_alert_event_service)],
+) -> AssigneeListResponse:
+    """Everyone a project's alerts can be assigned to.
+
+    Raises:
+        NotSignedInError (401), NotFoundError: project (404).
+    """
+    return await event_service.list_assignees(caller, project_id)

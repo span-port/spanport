@@ -13,14 +13,32 @@ from spanport_server.schemas.alert import (
     AlertRuleFields,
     AlertRuleRecord,
     AlertState,
+    AssigneeItem,
     OpenAlert,
 )
 from spanport_server.schemas.api_key import ApiKeyRecord, KeyType, Scope
 from spanport_server.schemas.auth import Caller, Role, UserRecord
-from spanport_server.schemas.endpoint import EndpointQuery, EndpointRow, TotalsRow
+from spanport_server.schemas.endpoint import (
+    EndpointQuery,
+    EndpointRow,
+    QueryRow,
+    SlowRequest,
+    StepRow,
+    TimelineRow,
+    TotalsRow,
+)
+from spanport_server.schemas.errors import (
+    ErrorApi,
+    ErrorBucket,
+    ErrorGroup,
+    FailedRequest,
+    StatusRange,
+)
 from spanport_server.schemas.log_row import LogRow
 from spanport_server.schemas.log_search import LogItem, LogPosition, LogQuery
+from spanport_server.schemas.service_map import MapRows
 from spanport_server.schemas.span_row import SpanRow
+from spanport_server.schemas.storage import ProjectRows
 from spanport_server.schemas.team import (
     AccountOwner,
     InviteDetails,
@@ -608,20 +626,132 @@ class FakeSpanWriter:
         self.rows.extend(rows)
 
 
+class FakeStorageStore:
+    """Row counts per project and average row sizes, as set by the test."""
+
+    def __init__(self) -> None:
+        self.logs: list[ProjectRows] = []
+        self.spans: list[ProjectRows] = []
+        self.row_bytes: dict[str, float] = {}
+
+    async def log_rows(self, org_id: UuidV7) -> list[ProjectRows]:
+        return list(self.logs)
+
+    async def span_rows(self, org_id: UuidV7) -> list[ProjectRows]:
+        return list(self.spans)
+
+    async def bytes_per_row(self, table: str) -> float:
+        return self.row_bytes.get(table, 0.0)
+
+
+class FakeEndpointDetailStore:
+    """One endpoint's rows as set by the test; records each query and interval."""
+
+    def __init__(self) -> None:
+        self.summary: EndpointRow | None = None
+        self.timeline_rows: list[TimelineRow] = []
+        self.status_rows: list[tuple[int, int]] = []
+        self.step_rows: list[StepRow] = []
+        self.slow_rows: list[SlowRequest] = []
+        self.queries: list[EndpointQuery] = []
+        self.bucket_seconds: list[int] = []
+
+    async def summary_row(self, query: EndpointQuery) -> EndpointRow | None:
+        self.queries.append(query)
+        return self.summary
+
+    async def timeline(self, query: EndpointQuery, bucket_seconds: int) -> list[TimelineRow]:
+        self.bucket_seconds.append(bucket_seconds)
+        return self.timeline_rows
+
+    async def statuses(self, query: EndpointQuery) -> list[tuple[int, int]]:
+        return self.status_rows
+
+    async def steps(self, query: EndpointQuery, limit: int) -> list[StepRow]:
+        return self.step_rows[:limit]
+
+    async def slowest(self, query: EndpointQuery, limit: int) -> list[SlowRequest]:
+        return self.slow_rows[:limit]
+
+
+class FakeErrorStore:
+    """HTTP error rows as set by the test; records each query and status range."""
+
+    def __init__(self) -> None:
+        self.bucket_rows: list[ErrorBucket] = []
+        self.apis: list[ErrorApi] = []
+        self.total = 0
+        self.group_rows: list[ErrorGroup] = []
+        self.failed: list[FailedRequest] = []
+        self.logged: dict[str, str] = {}
+        self.queries: list[EndpointQuery] = []
+        self.status_ranges: list[StatusRange] = []
+
+    async def buckets(self, query: EndpointQuery, bucket_seconds: int) -> list[ErrorBucket]:
+        self.queries.append(query)
+        return self.bucket_rows
+
+    async def failing_apis(self, query: EndpointQuery, limit: int) -> list[ErrorApi]:
+        self.queries.append(query)
+        return self.apis[:limit]
+
+    async def window_total(self, query: EndpointQuery, statuses: StatusRange) -> int:
+        self.queries.append(query)
+        self.status_ranges.append(statuses)
+        return self.total
+
+    async def groups(
+        self, query: EndpointQuery, statuses: StatusRange, limit: int
+    ) -> list[ErrorGroup]:
+        return self.group_rows[:limit]
+
+    async def failed_requests(
+        self, query: EndpointQuery, statuses: StatusRange, limit: int
+    ) -> list[FailedRequest]:
+        return self.failed[:limit]
+
+    async def logged_lines(self, query: EndpointQuery, trace_ids: list[str]) -> dict[str, str]:
+        return {
+            trace_id: self.logged[trace_id] for trace_id in trace_ids if trace_id in self.logged
+        }
+
+
+class FakeServiceMapStore:
+    """Map rows as set by the test: `rows` for the range, `previous` for the period before."""
+
+    def __init__(self) -> None:
+        self.rows = MapRows(services=[], steps=[], service_calls=[])
+        self.previous = MapRows(services=[], steps=[], service_calls=[])
+        self.queries: list[EndpointQuery] = []
+
+    async def map_rows(self, query: EndpointQuery, limit: int) -> MapRows:
+        self.queries.append(query)
+        return self.rows if len(self.queries) == 1 else self.previous
+
+
 class FakeEndpointStatsStore:
-    """Per-endpoint sums handed out as set; records each query."""
+    """Per-endpoint sums handed out as set; records each query. The service asks for the range
+    first, then the period just before it, so later calls get the `previous_` rows.
+    """
 
     def __init__(self) -> None:
         self.rows: list[EndpointRow] = []
+        self.previous_rows: list[EndpointRow] = []
         self.totals = TotalsRow(requests=0, errors=0, p95_ns=0)
+        self.previous_totals = TotalsRow(requests=0, errors=0, p95_ns=0)
+        self.query_rows: list[QueryRow] = []
         self.queries: list[EndpointQuery] = []
 
     async def endpoint_rows(self, query: EndpointQuery, limit: int) -> list[EndpointRow]:
         self.queries.append(query)
-        return self.rows[:limit]
+        rows = self.rows if len(self.queries) == 1 else self.previous_rows
+        return rows[:limit]
 
     async def endpoint_totals(self, query: EndpointQuery) -> TotalsRow:
-        return self.totals
+        return self.totals if query == self.queries[0] else self.previous_totals
+
+    async def slow_queries(self, query: EndpointQuery, limit: int) -> list[QueryRow]:
+        return self.query_rows[:limit]
 
 
 class FakeSpanSearchStore:
@@ -745,6 +875,9 @@ class FakeAlert:
     fired_at: datetime
     acknowledged_by: UuidV7 | None = None
     resolved_by: UuidV7 | None = None
+    assigned_to: UuidV7 | None = None
+    recovered_at: datetime | None = None
+    resolution_note: str | None = None
 
 
 class FakeAlertEventStore:
@@ -754,11 +887,52 @@ class FakeAlertEventStore:
         self.alerts: dict[UuidV7, FakeAlert] = {}
         self.rules = rules or FakeAlertRuleStore()
 
+    def _open(self, org_id: UuidV7, event_id: UuidV7) -> FakeAlert | None:
+        alert = self.alerts.get(event_id)
+        if alert is None or alert.org_id != org_id or alert.state == AlertState.RESOLVED:
+            return None
+        return alert
+
     async def find_open(self, org_id: UuidV7, rule_id: UuidV7) -> OpenAlert | None:
         for alert_id, alert in self.alerts.items():
             if (alert.org_id, alert.rule_id) == (org_id, rule_id) and alert.state != "resolved":
-                return OpenAlert(id=alert_id, state=alert.state, fired_at=alert.fired_at)
+                return OpenAlert(
+                    id=alert_id,
+                    state=alert.state,
+                    fired_at=alert.fired_at,
+                    recovered_at=alert.recovered_at,
+                )
         return None
+
+    async def mark_recovered(self, org_id: UuidV7, event_id: UuidV7, now: datetime) -> bool:
+        alert = self._open(org_id, event_id)
+        if alert is None or alert.recovered_at is not None:
+            return False
+        alert.recovered_at = now
+        return True
+
+    async def mark_breaking_again(
+        self, org_id: UuidV7, event_id: UuidV7, matched_count: int
+    ) -> bool:
+        alert = self._open(org_id, event_id)
+        if alert is None or alert.recovered_at is None:
+            return False
+        alert.recovered_at = None
+        alert.matched_count = matched_count
+        return True
+
+    async def assign(self, org_id: UuidV7, event_id: UuidV7, user_id: UuidV7) -> bool:
+        alert = self._open(org_id, event_id)
+        if alert is None:
+            return False
+        alert.assigned_to = user_id
+        return True
+
+    async def find_event_rule(self, org_id: UuidV7, event_id: UuidV7) -> AlertRuleRecord | None:
+        alert = self.alerts.get(event_id)
+        if alert is None or alert.org_id != org_id:
+            return None
+        return self.rules.rules.get(alert.rule_id)
 
     async def open_alert(
         self, org_id: UuidV7, rule_id: UuidV7, matched_count: int
@@ -773,30 +947,25 @@ class FakeAlertEventStore:
         return OpenAlert(id=alert_id, state=AlertState.FIRING, fired_at=fired_at)
 
     async def resolve(
-        self, org_id: UuidV7, event_id: UuidV7, resolved_by: UuidV7 | None, now: datetime
+        self, org_id: UuidV7, event_id: UuidV7, resolved_by: UuidV7, now: datetime, note: str
     ) -> bool:
-        alert = self.alerts.get(event_id)
-        if alert is None or alert.org_id != org_id or alert.state == AlertState.RESOLVED:
+        alert = self._open(org_id, event_id)
+        if alert is None:
             return False
         alert.state = AlertState.RESOLVED
         alert.resolved_by = resolved_by
+        alert.resolution_note = note or None
         return True
-
-    async def find_event_project(self, org_id: UuidV7, event_id: UuidV7) -> UuidV7 | None:
-        alert = self.alerts.get(event_id)
-        if alert is None or alert.org_id != org_id:
-            return None
-        rule = self.rules.rules.get(alert.rule_id)
-        return rule.project_id if rule else None
 
     async def acknowledge(
         self, org_id: UuidV7, event_id: UuidV7, user_id: UuidV7, now: datetime
     ) -> bool:
-        alert = self.alerts.get(event_id)
-        if alert is None or alert.org_id != org_id or alert.state != AlertState.FIRING:
+        alert = self._open(org_id, event_id)
+        if alert is None or alert.state != AlertState.FIRING:
             return False
         alert.state = AlertState.ACKNOWLEDGED
         alert.acknowledged_by = user_id
+        alert.assigned_to = user_id
         return True
 
     async def list_events(
@@ -820,13 +989,32 @@ class FakeAlertEventStore:
                     state=alert.state,
                     matched_count=alert.matched_count,
                     fired_at=alert.fired_at,
+                    recovered_at=alert.recovered_at,
+                    assignee_id=alert.assigned_to,
+                    assigned_to=None,
                     acknowledged_at=None,
                     acknowledged_by=None,
                     resolved_at=None,
                     resolved_by=None,
+                    resolution_note=alert.resolution_note,
                 )
             )
         return items[:limit]
+
+
+class FakeAssigneeStore:
+    """The people a project's alerts can be assigned to, as set by the test."""
+
+    def __init__(self) -> None:
+        self.people: list[AssigneeItem] = []
+
+    async def list_assignees(self, org_id: UuidV7, project_id: UuidV7) -> list[AssigneeItem]:
+        return list(self.people)
+
+    async def find_assignee(
+        self, org_id: UuidV7, project_id: UuidV7, user_id: UuidV7
+    ) -> AssigneeItem | None:
+        return next((person for person in self.people if person.id == user_id), None)
 
 
 class FakeEmailSender:

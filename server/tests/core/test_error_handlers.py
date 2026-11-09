@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 from fastapi import FastAPI
+from starlette.requests import ClientDisconnect
 
 from spanport_server.core.error_handlers import install_error_handlers
 from spanport_server.core.errors import InvalidRequestError
@@ -25,6 +26,10 @@ def build_app() -> FastAPI:
     @app.get("/crash")
     async def crash() -> None:
         raise RuntimeError("database password is hunter2")
+
+    @app.get("/cancelled")
+    async def cancelled() -> None:
+        raise ClientDisconnect
 
     return app
 
@@ -72,6 +77,18 @@ async def test_unexpected_error_hides_details_but_keeps_the_request_id(
     assert body["request_id"]
     assert "hunter2" not in response.text
     assert "unhandled error method=GET path=/crash" in caplog.text
+
+
+async def test_a_request_the_browser_cancelled_is_not_an_error(
+    client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("INFO")
+
+    response = await client.get("/cancelled")
+
+    assert response.status_code == 499
+    assert "request cancelled by the client method=GET path=/cancelled" in caplog.text
+    assert "unhandled error" not in caplog.text
 
 
 async def test_unknown_route_is_problem_json(client: httpx.AsyncClient) -> None:

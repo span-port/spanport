@@ -101,7 +101,7 @@ export function RuleForm({ projectId, editing, startQuery, onDone }: RuleFormPro
         />
         <span>minutes.</span>
       </div>
-      <p className="text-muted text-xs">{thresholdExplained(form.watched.threshold, form.watched.windowMinutes)}</p>
+      <p className="text-muted text-xs">{thresholdExplained(form.watched.threshold, form.watched.windowMinutes, form.limits.check_seconds)}</p>
       <RulePreview projectId={projectId} {...form.watched} />
       <label className="field">
         <span className="field-label">Email (up to {form.limits.max_emails}, separated by commas or new lines)</span>

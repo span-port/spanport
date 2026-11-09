@@ -1,23 +1,25 @@
 import { Fragment } from "react";
 import { Controller } from "react-hook-form";
 
-import { Button } from "../../../components/ui/Button";
-import { DatePicker } from "../../../components/ui/DatePicker";
-import { TimeSelect } from "../../../components/ui/TimeSelect";
-import { RELATIVE_UNITS } from "../../../constants/logs";
-import type { RangeSelection } from "../../../lib/timeRange";
-import { useCustomRangeForm } from "../hooks/useCustomRangeForm";
+import { LOG_RANGE_RULES, RELATIVE_UNITS } from "../../constants/logs";
+import { useCustomRangeForm } from "../../hooks/useCustomRangeForm";
+import type { RangeRules, RangeSelection } from "../../lib/timeRange";
+import { Button } from "./Button";
+import { DatePicker } from "./DatePicker";
+import { TimeSelect } from "./TimeSelect";
 
 interface CustomRangeDialogProps {
   range: RangeSelection;
   timeZone: string;
   onApply: (range: RangeSelection) => void;
   onCancel: () => void;
+  /** How far back the screen's data goes; Logs' by default. */
+  rules?: RangeRules;
 }
 
 /** Fixed start and end times (read in the chosen timezone), or "last N minutes / hours / days". */
-export function CustomRangeDialog({ range, timeZone, onApply, onCancel }: CustomRangeDialogProps) {
-  const form = useCustomRangeForm(range, timeZone, onApply);
+export function CustomRangeDialog({ range, timeZone, onApply, onCancel, rules = LOG_RANGE_RULES }: CustomRangeDialogProps) {
+  const form = useCustomRangeForm(range, timeZone, onApply, rules);
   return (
     <form
       role="dialog"
@@ -110,7 +112,9 @@ export function CustomRangeDialog({ range, timeZone, onApply, onCancel }: Custom
           </label>
         </div>
       )}
-      <p className="text-muted text-sm">Times are read in {timeZone}. Logs are kept 7 days.</p>
+      <p className="text-muted text-sm">
+        Times are read in {timeZone}; {rules.keptNote}.
+      </p>
       {form.problem && (
         <p role="alert" className="field-error">
           {form.problem}

@@ -6,7 +6,12 @@ from fakes import FakeEndpointStatsStore, FakeTenantStore
 from spanport_server.core.constants import MAX_ENDPOINTS
 from spanport_server.core.errors import InvalidRequestError, NotFoundError
 from spanport_server.schemas.auth import Caller
-from spanport_server.schemas.endpoint import EndpointRow, EndpointSummaryRequest, TotalsRow
+from spanport_server.schemas.endpoint import (
+    EndpointRow,
+    EndpointSummaryRequest,
+    QueryRow,
+    TotalsRow,
+)
 from spanport_server.schemas.tenant import ProjectRef
 from spanport_server.services.endpoint_service import EndpointService, average_layers
 
@@ -21,20 +26,15 @@ def row(route: str = "/users/:id", **changes: int) -> EndpointRow:
     fields: dict[str, int] = {
         "requests": 10,
         "errors": 1,
+        "p50_ns": 80 * MS,
+        "p95_ns": 180 * MS,
+        "p99_ns": 250 * MS,
         "total_ns": 1000 * MS,
         "db_ns": 300 * MS,
         "external_ns": 200 * MS,
         "llm_ns": 0,
     } | changes
-    return EndpointRow(
-        service="api",
-        http_method="GET",
-        route=route,
-        p50_ns=80 * MS,
-        p95_ns=180 * MS,
-        p99_ns=250 * MS,
-        **fields,
-    )
+    return EndpointRow(service="api", http_method="GET", route=route, **fields)
 
 
 class Setup:
@@ -89,12 +89,50 @@ async def test_summary_in_milliseconds_with_totals(setup: Setup) -> None:
         100,
     )
     assert (summary.totals.requests, summary.totals.p95_ms, summary.has_more) == (10, 180, False)
-    (query,) = setup.stats.queries
+    assert (endpoint.previous_p95_ms, summary.totals.previous_p95_ms) == (None, None)
+    query, before = setup.stats.queries
     assert (query.org_id, query.project_id, query.service) == (
         setup.project.org_id,
         setup.project.project_id,
         "api",
     )
+    # The period just before, of the same length.
+    assert (before.end, before.end - before.start) == (query.start, query.end - query.start)
+
+
+async def test_each_endpoint_carries_its_slow_5_percent_time_from_just_before(
+    setup: Setup,
+) -> None:
+    setup.stats.rows = [row("/users/:id", p95_ns=900 * MS), row("/new")]
+    setup.stats.previous_rows = [row("/users/:id", p95_ns=300 * MS)]
+    setup.stats.totals = TotalsRow(requests=20, errors=0, p95_ns=900 * MS)
+    setup.stats.previous_totals = TotalsRow(requests=8, errors=0, p95_ns=250 * MS)
+
+    summary = await setup.service.summary(setup.caller, setup.request())
+
+    assert [item.previous_p95_ms for item in summary.data] == [300, None]
+    assert summary.totals.previous_p95_ms == 250
+
+
+async def test_slow_queries_say_how_often_a_request_runs_them(setup: Setup) -> None:
+    setup.stats.query_rows = [
+        QueryRow(
+            service="api",
+            http_method="GET",
+            route="/jobs",
+            statement="SELECT * FROM applications WHERE candidate_id = $1",
+            calls=480,
+            requests=10,
+            avg_ns=3 * MS,
+            p95_ns=7 * MS,
+            total_ns=1440 * MS,
+        )
+    ]
+
+    (query,) = (await setup.service.summary(setup.caller, setup.request())).slow_queries
+
+    assert (query.calls_per_request, query.avg_ms, query.total_ms) == (48, 3, 1440)
+    assert query.route == "/jobs"
 
 
 async def test_only_the_busiest_endpoints_are_listed(setup: Setup) -> None:

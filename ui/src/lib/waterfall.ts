@@ -1,5 +1,6 @@
 // Pure helpers for the trace waterfall: tree order, bar positions, labels and links.
 import {
+  AXIS_END_PERCENT,
   AXIS_STEP_FACTORS,
   DECIMAL_BASE,
   EMPTY_STEP_TIMES,
@@ -111,6 +112,12 @@ export function axisTicks(totalMs: number): { label: string; percent: number }[]
     ticks.push({ label: atMs === 0 ? "0" : formatDuration(atMs), percent: (atMs / totalMs) * PERCENT });
   }
   return ticks;
+}
+
+/** How a tick's label sits: from the start at 0, ending at the mark near the right edge, else centred on it. */
+export function tickEdge(percent: number): "start" | "end" | "middle" {
+  if (percent === 0) return "start";
+  return percent >= AXIS_END_PERCENT ? "end" : "middle";
 }
 
 /** The smallest 1, 2 or 5 times a power of ten that is at least `minimumMs`. */

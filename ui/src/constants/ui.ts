@@ -47,6 +47,11 @@ export const REQUESTS_ROUTE = "/requests";
 // One trace's waterfall: /requests/{trace_id}?project=...
 export const TRACE_ROUTE = "/requests/:traceId";
 export const APIS_ROUTE = "/apis";
+// One API: /apis/detail?project=&service=&method=&route=&range=
+export const API_DETAIL_ROUTE = "/apis/detail";
+export const SERVICE_MAP_ROUTE = "/apis/map";
+export const ERRORS_ROUTE = "/errors";
+export const DATA_ROUTE = "/data";
 export const USERS_ROUTE = "/users";
 // Open to anyone with an invite link: /accept-invite?token=...
 export const ACCEPT_INVITE_ROUTE = "/accept-invite";

@@ -45,8 +45,17 @@ class AlertNotifier:
         Raises:
             DeliveryError: Email isn't set up, or the mail server failed.
         """
+        await self._send(list(rule.email_recipients), email)
+
+    async def notify_person(self, address: str, email: AlertEmail) -> None:
+        """Email one person, e.g. the one an alert was just assigned to.
+
+        Raises:
+            DeliveryError: Email isn't set up, or the mail server failed.
+        """
+        await self._send([address], email)
+
+    async def _send(self, recipients: list[str], email: AlertEmail) -> None:
         if self._email is None:
             raise DeliveryError(EMAIL_NOT_SET_UP_DETAIL)
-        await self._email.send(
-            list(rule.email_recipients), email.subject, render_text(email), render_html(email)
-        )
+        await self._email.send(recipients, email.subject, render_text(email), render_html(email))

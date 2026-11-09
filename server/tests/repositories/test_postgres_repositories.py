@@ -37,6 +37,18 @@ async def public_tables(settings: DatabaseSettings) -> set[str]:
     return names
 
 
+async def table_columns(settings: DatabaseSettings, table: str) -> set[str]:
+    engine = create_postgres_engine(settings)
+    async with engine.connect() as connection:
+        columns = await connection.scalars(
+            text("SELECT column_name FROM information_schema.columns WHERE table_name = :table"),
+            {"table": table},
+        )
+        names = set(columns)
+    await engine.dispose()
+    return names
+
+
 async def make_project(sessionmaker: async_sessionmaker[AsyncSession]) -> ProjectRef:
     return await TenantRepository(sessionmaker).get_or_create_project(
         "acme", "northwind", "hr-portal", "production"
@@ -48,6 +60,8 @@ async def test_downgrade_one_steps_back_one_migration_at_a_time_then_refuses_at_
 ) -> None:
     schema = PostgresSchemaRepository(postgres_settings)
 
+    await schema.downgrade_one()
+    assert "assigned_to" not in await table_columns(postgres_settings, "alert_events")
     await schema.downgrade_one()
     assert "project_members" not in await public_tables(postgres_settings)
     await schema.downgrade_one()
@@ -138,15 +152,16 @@ async def test_archiving_a_project_stops_its_data_keys_until_restored(
     tenants = TenantRepository(postgres_sessionmaker)
     keys = ApiKeyRepository(postgres_sessionmaker)
     project = await make_project(postgres_sessionmaker)
-    await keys.insert_key(project.org_id, project.project_id, KeyType.INGEST, "data-hash", "a1b2")
+    data_hash = hash_api_key(RAW_KEY)
+    await keys.insert_key(project.org_id, project.project_id, KeyType.INGEST, data_hash, "a1b2")
 
     archived = await tenants.set_archived(project.org_id, project.project_id, datetime.now(UTC))
-    while_archived = await keys.find_by_hash("data-hash")
+    while_archived = await keys.find_by_hash(data_hash)
     await tenants.set_archived(project.org_id, project.project_id, None)
 
     assert archived is not None and archived.archived
     assert while_archived is None
-    assert await keys.find_by_hash("data-hash") is not None
+    assert await keys.find_by_hash(data_hash) is not None
     assert await tenants.set_archived(new_id(), project.project_id, None) is None
 
 
@@ -156,12 +171,13 @@ async def test_deleting_a_project_deletes_its_keys_and_only_revoked_keys_can_be_
     tenants = TenantRepository(postgres_sessionmaker)
     keys = ApiKeyRepository(postgres_sessionmaker)
     project = await make_project(postgres_sessionmaker)
+    data_hash = hash_api_key(RAW_KEY)
     data_key = await keys.insert_key(
-        project.org_id, project.project_id, KeyType.INGEST, "data-hash", "a1b2"
+        project.org_id, project.project_id, KeyType.INGEST, data_hash, "a1b2"
     )
     other = await tenants.get_or_create_project("acme", "northwind", "hr-portal", "staging")
     other_key = await keys.insert_key(
-        other.org_id, other.project_id, KeyType.INGEST, "other-hash", "c3d4"
+        other.org_id, other.project_id, KeyType.INGEST, hash_api_key("sp_ingest_other"), "c3d4"
     )
 
     assert await keys.delete_revoked(other.org_id, other_key.id) is False
@@ -171,7 +187,7 @@ async def test_deleting_a_project_deletes_its_keys_and_only_revoked_keys_can_be_
     assert await tenants.delete_project(project.org_id, project.project_id) is False
 
     assert await tenants.find_project(project.org_id, project.project_id) is None
-    assert await keys.find_by_hash("data-hash") is None
+    assert await keys.find_by_hash(data_hash) is None
     assert data_key.id not in [key.id for key in await keys.list_for_org(project.org_id)]
 
 
@@ -203,7 +219,7 @@ async def test_keys_have_names_and_page_newest_first(
             project.org_id,
             project.project_id,
             KeyType.INGEST,
-            f"hash-{number}",
+            hash_api_key(f"sp_ingest_page-test-{number}"),
             f"000{number}",
             name=f"key-{number}",
         )

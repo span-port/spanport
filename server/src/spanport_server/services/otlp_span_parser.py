@@ -10,7 +10,7 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 from opentelemetry.proto.trace.v1.trace_pb2 import Span, Status
 
 from spanport_server.core.constants import (
-    DB_SYSTEM_ATTRIBUTE,
+    DB_SYSTEM_ATTRIBUTES,
     GEN_AI_ATTRIBUTE_PREFIX,
     HTTP_METHOD_ATTRIBUTES,
     HTTP_ROUTE_ATTRIBUTES,
@@ -117,7 +117,7 @@ def span_category(kind: str, attributes: dict[str, str]) -> str:
     """
     if any(key.startswith(GEN_AI_ATTRIBUTE_PREFIX) for key in attributes):
         return SPAN_CATEGORY_LLM
-    if DB_SYSTEM_ATTRIBUTE in attributes:
+    if any(name in attributes for name in DB_SYSTEM_ATTRIBUTES):
         return SPAN_CATEGORY_DB
     if kind in OUTGOING_SPAN_KINDS:
         return SPAN_CATEGORY_CLIENT

@@ -18,11 +18,16 @@ const FIRING: AlertEvent = {
   state: "firing",
   matched_count: 42,
   fired_at: "2026-10-30T12:00:00Z",
+  recovered_at: null,
+  assignee_id: null,
+  assigned_to: null,
   acknowledged_at: null,
   acknowledged_by: null,
   resolved_at: null,
   resolved_by: null,
+  resolution_note: null,
 };
+const PRIYA = { id: "u2", name: "Priya", email: "priya@x.com" };
 
 // A server configured below the defaults, so the form shows it follows the server.
 const SERVER_LIMITS = { check_seconds: 10, max_emails: 3, max_window_minutes: 30, max_rules_per_project: 50 };
@@ -42,6 +47,7 @@ function server(role: string, events: AlertEvent[] = []) {
     if (path.startsWith("/api/v1/projects")) return Promise.resolve(page([PROJECT]));
     if (path === "/api/v1/logs/counts") return Promise.resolve(json({ total: 37, by_level: { ERROR: 37 } }));
     if (path === "/api/v1/alert-settings") return Promise.resolve(json(SERVER_LIMITS));
+    if (path.startsWith("/api/v1/alert-assignees")) return Promise.resolve(page([PRIYA]));
     if (path.startsWith("/api/v1/alert-events") && init.method !== "POST") return Promise.resolve(page(events));
     if (init.method === "POST" && path === "/api/v1/alert-rules") return Promise.resolve(json({}, 201));
     if (init.method === "POST") return Promise.resolve(new Response(null, { status: 204 }));
@@ -117,12 +123,39 @@ describe("Alerts", () => {
     expect(screen.queryByRole("button", { name: "New alert rule" })).toBeNull();
   });
 
+  it("assigns an alert to someone and resolves it with a note", async () => {
+    const fetchMock = server("member", [{ ...FIRING, recovered_at: "2026-10-30T12:02:00Z" }]);
+    renderAt("/alerts");
+
+    expect(await screen.findByText(/still needs a person to resolve it/)).toBeDefined();
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Assign Too many errors to" }), "u2");
+    await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    await userEvent.type(screen.getByLabelText(/What did you find/), "Expired AWS key, rotated it.");
+    await userEvent.click(screen.getByRole("button", { name: "Mark resolved" }));
+
+    const assign = callTo(fetchMock, "POST", "/api/v1/alert-events/e1/assign");
+    const resolve = callTo(fetchMock, "POST", "/api/v1/alert-events/e1/resolve");
+    expect(JSON.parse(assign?.[1].body as string)).toEqual({ user_id: "u2" });
+    expect(JSON.parse(resolve?.[1].body as string)).toEqual({ note: "Expired AWS key, rotated it." });
+  });
+
+  it("shows a closed alert's note and who resolved it in the history", async () => {
+    server("member", [
+      { ...FIRING, state: "resolved", resolved_at: "2026-10-30T12:20:00Z", resolved_by: "Priya", resolution_note: "Rotated the key." },
+    ]);
+    renderAt("/alerts");
+
+    expect(await screen.findByText("Resolved by Priya")).toBeDefined();
+    expect(screen.getByText("Rotated the key.")).toBeDefined();
+  });
+
   it("shows a viewer the alert but no actions", async () => {
     server("viewer", [FIRING]);
     renderAt("/alerts");
 
     expect(await screen.findByText("Too many errors")).toBeDefined();
     expect(screen.queryByRole("button", { name: "I'm on it" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Mark resolved" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Resolve" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /Assign/ })).toBeNull();
   });
 });

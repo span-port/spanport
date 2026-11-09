@@ -4,6 +4,7 @@ import pytest
 from fakes import (
     FakeAlertEventStore,
     FakeAlertRuleStore,
+    FakeAssigneeStore,
     FakeEmailSender,
     FakeLogSearchStore,
     FakeTenantStore,
@@ -18,7 +19,12 @@ from spanport_server.core.errors import (
     NotSignedInError,
 )
 from spanport_server.core.ids import new_id
-from spanport_server.schemas.alert import AlertLimits, AlertState, CreateAlertRuleRequest
+from spanport_server.schemas.alert import (
+    AlertLimits,
+    AlertState,
+    AssigneeItem,
+    CreateAlertRuleRequest,
+)
 from spanport_server.schemas.auth import Caller
 from spanport_server.schemas.tenant import ProjectRef
 from spanport_server.services.alert_check_service import AlertCheckService
@@ -46,7 +52,8 @@ class Setup:
         self.email = FakeEmailSender()
         notifier = AlertNotifier(self.email)
         self.rule_service = AlertRuleService(self.rules, tenants, notifier)
-        self.event_service = AlertEventService(self.alerts, tenants)
+        self.assignees = FakeAssigneeStore()
+        self.event_service = AlertEventService(self.alerts, tenants, self.assignees, notifier)
         self.checks = AlertCheckService(self.rules, self.alerts, self.logs, tenants, notifier)
 
     def rule_request(self, **changes: object) -> CreateAlertRuleRequest:
@@ -134,22 +141,71 @@ async def test_send_test_emails_the_recipients_and_reports_a_refusal(setup: Setu
         await setup.rule_service.send_test(setup.caller, rule.id)
 
 
-async def test_alert_fires_once_then_resolves_itself_with_an_email_each(setup: Setup) -> None:
+async def test_back_to_normal_keeps_the_alert_open_until_a_person_resolves_it(
+    setup: Setup,
+) -> None:
     await setup.rule_service.create_rule(setup.caller, setup.rule_request())
 
     await setup.check_with(matched=21)
     await setup.check_with(matched=40, at=NOW + timedelta(minutes=1))
     await setup.check_with(matched=3, at=NOW + timedelta(minutes=2))
+    await setup.check_with(matched=2, at=NOW + timedelta(minutes=3))
 
     subjects = [sent[1] for sent in setup.email.sent]
     assert subjects == [
         "[Spanport] Firing: Too many errors",
-        "[Spanport] Resolved: Too many errors",
+        "[Spanport] Back to normal: Too many errors",
     ]
     (alert,) = setup.alerts.alerts.values()
-    assert alert.state == AlertState.RESOLVED
-    assert alert.resolved_by is None
+    assert alert.state == AlertState.FIRING
+    assert alert.recovered_at == NOW + timedelta(minutes=2)
     assert "21 log lines matched in the last 5 minutes" in setup.email.sent[0][2]
+    assert "stays open until someone resolves it" in setup.email.sent[1][2]
+
+
+async def test_breaking_the_rule_again_before_anyone_resolves_it_fires_again(setup: Setup) -> None:
+    await setup.rule_service.create_rule(setup.caller, setup.rule_request())
+
+    await setup.check_with(matched=21)
+    await setup.check_with(matched=3, at=NOW + timedelta(minutes=1))
+    await setup.check_with(matched=55, at=NOW + timedelta(minutes=2))
+
+    (alert,) = setup.alerts.alerts.values()
+    assert (alert.recovered_at, alert.matched_count) == (None, 55)
+    assert [sent[1].split(":")[0] for sent in setup.email.sent] == [
+        "[Spanport] Firing",
+        "[Spanport] Back to normal",
+        "[Spanport] Firing",
+    ]
+
+
+async def test_assign_emails_the_person_but_not_yourself(setup: Setup) -> None:
+    await setup.rule_service.create_rule(setup.caller, setup.rule_request())
+    await setup.check_with(matched=21)
+    (alert_id,) = setup.alerts.alerts
+    dev = AssigneeItem(id=new_id(), name="Priya", email="priya@example.com")
+    me = AssigneeItem(id=setup.caller.user_id or new_id(), name="Sam", email="sam@example.com")
+    setup.assignees.people = [dev, me]
+    sent_before = len(setup.email.sent)
+
+    await setup.event_service.assign(setup.caller, alert_id, dev.id)
+    await setup.event_service.assign(setup.caller, alert_id, me.id)
+
+    (assignment,) = setup.email.sent[sent_before:]
+    assert assignment[0] == ["priya@example.com"]
+    assert assignment[1] == "[Spanport] Assigned to you: Too many errors"
+    assert "Sam assigned this alert to you." in assignment[2]
+    assert setup.alerts.alerts[alert_id].assigned_to == me.id
+
+
+async def test_only_people_who_can_take_the_alert_are_assignable(setup: Setup) -> None:
+    await setup.rule_service.create_rule(setup.caller, setup.rule_request())
+    await setup.check_with(matched=21)
+    (alert_id,) = setup.alerts.alerts
+
+    with pytest.raises(InvalidRequestError, match="user_id"):
+        await setup.event_service.assign(setup.caller, alert_id, new_id())
+    assert setup.alerts.alerts[alert_id].assigned_to is None
 
 
 async def test_exactly_the_threshold_does_not_fire(setup: Setup) -> None:
@@ -212,19 +268,20 @@ async def test_disabled_rules_are_not_checked(setup: Setup) -> None:
     assert await setup.check_with(matched=99) == 0
 
 
-async def test_acknowledge_then_resolve_records_who(setup: Setup) -> None:
+async def test_on_it_assigns_yourself_and_resolve_records_who_and_the_note(setup: Setup) -> None:
     await setup.rule_service.create_rule(setup.caller, setup.rule_request())
     await setup.check_with(matched=21)
     (alert_id,) = setup.alerts.alerts
 
     await setup.event_service.acknowledge(setup.caller, alert_id)
-    await setup.event_service.resolve(setup.caller, alert_id)
+    await setup.event_service.resolve(setup.caller, alert_id, "  Expired AWS key, rotated.  ")
 
     alert = setup.alerts.alerts[alert_id]
-    assert alert.acknowledged_by == setup.caller.user_id
+    assert alert.acknowledged_by == alert.assigned_to == setup.caller.user_id
     assert alert.resolved_by == setup.caller.user_id
+    assert alert.resolution_note == "Expired AWS key, rotated."
     with pytest.raises(NotFoundError):
-        await setup.event_service.resolve(setup.caller, alert_id)
+        await setup.event_service.resolve(setup.caller, alert_id, "")
 
 
 async def test_an_admin_key_cannot_acknowledge(setup: Setup) -> None:

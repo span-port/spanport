@@ -19,6 +19,7 @@ from spanport_server.core.constants import (
     MAX_ALERT_THRESHOLD,
     MAX_EMAIL_LENGTH,
     MAX_QUERY_LENGTH,
+    MAX_RESOLUTION_NOTE_LENGTH,
 )
 from spanport_server.core.ids import UuidV7
 
@@ -122,7 +123,9 @@ class AlertRuleListResponse(BaseModel):
 class AlertEventItem(BaseModel):
     """One alert, with its rule's current settings and who handled it.
 
-    `resolved_by` is None with a `resolved_at` when the alert resolved itself.
+    `recovered_at` is when the logs went back within the rule; the alert stays open until a
+    person resolves it. `resolved_by` is None with a `resolved_at` only for alerts that closed
+    themselves before alerts waited for a person.
     """
 
     id: UuidV7
@@ -134,10 +137,46 @@ class AlertEventItem(BaseModel):
     state: AlertState
     matched_count: int
     fired_at: datetime
+    recovered_at: datetime | None
+    assignee_id: UuidV7 | None
+    assigned_to: str | None
     acknowledged_at: datetime | None
     acknowledged_by: str | None
     resolved_at: datetime | None
     resolved_by: str | None
+    resolution_note: str | None
+
+
+class AssignAlertRequest(BaseModel):
+    """Who should handle the alert."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UuidV7
+
+
+class ResolveAlertRequest(BaseModel):
+    """What was found or done; shown in the alert's history."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    note: str = Field(default="", max_length=MAX_RESOLUTION_NOTE_LENGTH)
+
+
+class AssigneeItem(BaseModel):
+    """Someone an alert can be assigned to."""
+
+    id: UuidV7
+    name: str
+    email: str
+
+
+class AssigneeListResponse(BaseModel):
+    """Everyone a project's alerts can be assigned to, by name. One page holds them all."""
+
+    data: list[AssigneeItem]
+    next_cursor: None = None
+    has_more: bool = False
 
 
 class AlertEventListResponse(BaseModel):
@@ -150,8 +189,11 @@ class AlertEventListResponse(BaseModel):
 
 @dataclass(frozen=True)
 class OpenAlert:
-    """The open (firing or acknowledged) alert of a rule, as the check job needs it."""
+    """The open (firing or acknowledged) alert of a rule, as the check job needs it.
+    `recovered_at` is set while its logs are back within the rule.
+    """
 
     id: UuidV7
     state: AlertState
     fired_at: datetime
+    recovered_at: datetime | None = None

@@ -4,7 +4,7 @@ import { ALERT_TABS } from "../../../constants/alerts";
 import { useSessionStore } from "../../../state/sessionStore";
 import { useCurrentUser } from "../../auth";
 import { useSelectedProject } from "../../projects";
-import { useAlertActions, useAlertEvents, useAlertRules, useRuleActions } from "../hooks/useAlerts";
+import { useAlertActions, useAlertEvents, useAlertRules, useAssignees, useRuleActions } from "../hooks/useAlerts";
 import { useAlertsPage } from "../hooks/useAlertsPage";
 import { AlertList } from "./AlertList";
 import { RuleForm } from "./RuleForm";
@@ -18,6 +18,7 @@ export function AlertsPage() {
   const rules = useAlertRules(projectId);
   const events = useAlertEvents(projectId);
   const alertActions = useAlertActions();
+  const assignees = useAssignees(projectId, page.canRespond);
   const ruleActions = useRuleActions();
   const timeZone = useSessionStore((session) => session.timeZone);
   const firing = (events.data?.data ?? []).filter((event) => event.state === "firing").length;
@@ -25,12 +26,9 @@ export function AlertsPage() {
   return (
     <div className="setup-page">
       <header className="page-heading page-heading-row">
-        <div>
+        <div className="page-heading">
           <h1 className="page-title">Alerts</h1>
-          <p className="text-secondary">
-            A rule emails people when a search finds more log lines than it should, for example more than 20 errors
-            in 5 minutes, and again when things are back to normal.
-          </p>
+          <p className="text-secondary">What is firing now, who is handling it, and what happened before.</p>
         </div>
         {page.canManageRules && page.editing === null && selected !== null && (
           <Button variant="primary" onClick={page.startNewRule}>
@@ -60,8 +58,11 @@ export function AlertsPage() {
           events={events.data?.data ?? []}
           loaded={events.isSuccess}
           timeZone={timeZone}
+          projectId={projectId ?? ""}
           canRespond={page.canRespond}
+          assignees={assignees}
           onAcknowledge={alertActions.acknowledge}
+          onAssign={alertActions.assign}
           onResolve={alertActions.resolve}
         />
       ) : (

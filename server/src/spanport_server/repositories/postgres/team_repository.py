@@ -242,7 +242,7 @@ class TeamRepository:
             )
         async with self._sessionmaker() as session:
             row = (await session.execute(INVITE_ITEM.where(Invite.id == invite_id))).one()
-        return to_invite_item(row.tuple())
+        return to_invite_item(row)
 
     async def list_open_invites(
         self, org_id: UuidV7, now: datetime, after_id: UuidV7 | None, limit: int
@@ -256,7 +256,7 @@ class TeamRepository:
         if after_id is not None:
             query = query.where(Invite.id > after_id)
         async with self._sessionmaker() as session:
-            return [to_invite_item(row.tuple()) for row in await session.execute(query)]
+            return [to_invite_item(row) for row in await session.execute(query)]
 
     async def cancel_invite(self, org_id: UuidV7, invite_id: UuidV7, now: datetime) -> bool:
         """Cancel an open invite; its link stops working. False when there is none."""

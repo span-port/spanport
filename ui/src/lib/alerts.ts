@@ -1,7 +1,22 @@
 // Pure helpers for log alerts: what a rule says in words, its settings, and email lists.
-import { EMAIL_LIST_JOINER, EMAIL_LIST_SEPARATOR, TEST_SENT_HINT, URL_PARAM_ALERT_QUERY } from "../constants/alerts";
-import { URL_PARAM_PROJECT } from "../constants/logs";
-import { ALERTS_ROUTE } from "../constants/ui";
+import {
+  EMAIL_LIST_JOINER,
+  EMAIL_LIST_SEPARATOR,
+  MS_PER_MINUTE,
+  TEST_SENT_HINT,
+  URL_PARAM_ALERT_QUERY,
+} from "../constants/alerts";
+import {
+  MODE_QUERY,
+  RANGE_ABSOLUTE,
+  URL_PARAM_END,
+  URL_PARAM_MODE,
+  URL_PARAM_PROJECT,
+  URL_PARAM_QUERY,
+  URL_PARAM_RANGE,
+  URL_PARAM_START,
+} from "../constants/logs";
+import { ALERTS_ROUTE, LOGS_ROUTE } from "../constants/ui";
 import { isManager } from "./roles";
 import type { AlertEvent, AlertRule, AlertRuleSettings, AlertState } from "../features/alerts/api";
 import type { CurrentUser } from "../features/auth";
@@ -10,6 +25,24 @@ import type { CurrentUser } from "../features/auth";
 export function newAlertLink(projectId: string, query: string): string {
   const params = new URLSearchParams({ [URL_PARAM_PROJECT]: projectId, [URL_PARAM_ALERT_QUERY]: query });
   return `${ALERTS_ROUTE}?${params.toString()}`;
+}
+
+/** The Logs page with the rule's search over the window that fired the alert and as long again after it. */
+export function alertLogsLink(
+  projectId: string,
+  event: Pick<AlertEvent, "query" | "fired_at" | "window_minutes">,
+): string {
+  const firedMs = Date.parse(event.fired_at);
+  const windowMs = event.window_minutes * MS_PER_MINUTE;
+  const params = new URLSearchParams({
+    [URL_PARAM_PROJECT]: projectId,
+    [URL_PARAM_RANGE]: RANGE_ABSOLUTE,
+    [URL_PARAM_START]: new Date(firedMs - windowMs).toISOString(),
+    [URL_PARAM_END]: new Date(firedMs + windowMs).toISOString(),
+    [URL_PARAM_QUERY]: event.query,
+    [URL_PARAM_MODE]: MODE_QUERY,
+  });
+  return `${LOGS_ROUTE}?${params.toString()}`;
 }
 
 /** Just the settings of a rule, as the update call takes them (no id or dates). */
@@ -37,19 +70,54 @@ export function testSentMessage(rule: Pick<AlertRule, "name" | "email_recipients
 }
 
 /**
- * The rule's numbers in plain words, e.g. "Every minute, Spanport counts the matching lines of the
- * last 5 minutes. 21 or more sends a Firing email; back to 20 or fewer sends Resolved."
+ * The rule's numbers in plain words, e.g. "Every 10 seconds, Spanport counts the matching lines of
+ * the last 5 minutes. 21 or more sends a Firing email; back to 20 or fewer sends Resolved."
  */
-export function thresholdExplained(threshold: number, windowMinutes: number): string {
+export function thresholdExplained(threshold: number, windowMinutes: number, checkSeconds: number): string {
   if (!Number.isInteger(threshold) || !Number.isInteger(windowMinutes) || threshold < 0 || windowMinutes < 1) {
     return "";
   }
+  const every = `Every ${String(checkSeconds)} seconds`;
   const minutes = windowMinutes === 1 ? "minute" : `${String(windowMinutes)} minutes`;
   if (threshold === 0) {
     const quiet = windowMinutes === 1 ? "a minute" : minutes;
-    return `Every minute, Spanport looks at the last ${minutes}. Any matching line sends a Firing email; when none arrive for ${quiet}, it sends Resolved.`;
+    return `${every}, Spanport looks at the last ${minutes}. Any matching line sends a Firing email; when none arrive for ${quiet}, it sends Back to normal.`;
   }
-  return `Every minute, Spanport counts the matching lines of the last ${minutes}. ${String(threshold + 1)} or more sends a Firing email; back to ${String(threshold)} or fewer sends Resolved.`;
+  return `${every}, Spanport counts the matching lines of the last ${minutes}. ${String(threshold + 1)} or more sends a Firing email; back to ${String(threshold)} or fewer sends Back to normal.`;
+}
+
+/** e.g. "with 4 lines in 1 min": what the check counted when the alert fired. */
+export function firedWith(event: Pick<AlertEvent, "matched_count" | "window_minutes">): string {
+  const lines = event.matched_count === 1 ? "line" : "lines";
+  return `with ${event.matched_count.toLocaleString("en")} ${lines} in ${String(event.window_minutes)} min`;
+}
+
+/**
+ * Who closed an alert, e.g. "Resolved by Priya". Alerts closed before alerts waited for a person
+ * have nobody, e.g. "Closed automatically: back to 1 or fewer matching lines in 1 min".
+ */
+export function howItEnded(event: Pick<AlertEvent, "resolved_by" | "threshold" | "window_minutes">): string {
+  if (event.resolved_by !== null) return `Resolved by ${event.resolved_by}`;
+  return `Closed automatically: back to ${allowedLines(event.threshold)} in ${String(event.window_minutes)} min`;
+}
+
+/** e.g. "Back to normal at 03:32 (1 or fewer matching lines in 1 min); still needs a person to resolve it". */
+export function backToNormalText(
+  event: Pick<AlertEvent, "threshold" | "window_minutes">,
+  recoveredAt: string,
+): string {
+  return `Back to normal at ${recoveredAt} (${allowedLines(event.threshold)} in ${String(event.window_minutes)} min); still needs a person to resolve it`;
+}
+
+/** "no matching lines" or "20 or fewer matching lines": what the rule allows. */
+function allowedLines(threshold: number): string {
+  return threshold === 0 ? "no matching lines" : `${threshold.toLocaleString("en")} or fewer matching lines`;
+}
+
+/** e.g. "after 2 min", "after under a minute": how long an alert stayed open. */
+export function openFor(firedAt: string, resolvedAt: string): string {
+  const minutes = Math.round((Date.parse(resolvedAt) - Date.parse(firedAt)) / MS_PER_MINUTE);
+  return minutes < 1 ? "after under a minute" : `after ${String(minutes)} min`;
 }
 
 /** e.g. "Right now: 37 lines in the last 5 minutes, so this alert would fire." */

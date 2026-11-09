@@ -92,6 +92,8 @@ def test_route_from_path_hides_only_id_like_parts(path: str, route: str) -> None
         # The first matching rule wins: an LLM call over HTTP is still "llm".
         (Span.SPAN_KIND_CLIENT, {"gen_ai.system": "anthropic"}, "llm"),
         (Span.SPAN_KIND_CLIENT, {"db.system": "postgresql"}, "db"),
+        # The current OpenTelemetry name, sent by e.g. @opentelemetry/instrumentation-pg 0.77.
+        (Span.SPAN_KIND_CLIENT, {"db.system.name": "postgresql"}, "db"),
         (Span.SPAN_KIND_CLIENT, {"server.address": "s3.amazonaws.com"}, "client"),
         (Span.SPAN_KIND_PRODUCER, {}, "client"),
         (Span.SPAN_KIND_SERVER, {}, "incoming_request"),

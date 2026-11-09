@@ -14,6 +14,7 @@ from spanport_server.controllers import (
     api_key_controller,
     auth_controller,
     endpoint_controller,
+    error_controller,
     health_controller,
     log_export_controller,
     log_search_controller,
@@ -21,6 +22,8 @@ from spanport_server.controllers import (
     otlp_logs_controller,
     otlp_traces_controller,
     project_controller,
+    service_map_controller,
+    storage_controller,
     team_controller,
     trace_controller,
 )
@@ -97,6 +100,9 @@ def create_app() -> FastAPI:
     app.include_router(team_controller.router)
     app.include_router(trace_controller.router)
     app.include_router(endpoint_controller.router)
+    app.include_router(error_controller.router)
+    app.include_router(service_map_controller.router)
+    app.include_router(storage_controller.router)
     return app
 
 

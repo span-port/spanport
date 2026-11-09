@@ -2,7 +2,9 @@
 import { apiJson, apiResponse } from "../../api/client";
 import {
   ACKNOWLEDGE_SUFFIX,
+  ALERT_ASSIGNEES_PATH,
   ALERT_EVENTS_PATH,
+  ASSIGN_SUFFIX,
   ALERT_RULES_PATH,
   ALERT_SETTINGS_PATH,
   ALERTS_PAGE_SIZE,
@@ -28,7 +30,11 @@ export interface AlertRule extends AlertRuleSettings {
   created_at: string;
 }
 
-/** One alert; `resolved_by` is null with a `resolved_at` when it resolved itself. */
+/**
+ * One alert. It stays open until a person resolves it; `recovered_at` is when its logs went back
+ * within the rule. `resolved_by` is null with a `resolved_at` only for alerts that closed
+ * themselves before alerts waited for a person.
+ */
 export interface AlertEvent {
   id: string;
   rule_id: string;
@@ -39,10 +45,21 @@ export interface AlertEvent {
   state: AlertState;
   matched_count: number;
   fired_at: string;
+  recovered_at: string | null;
+  assignee_id: string | null;
+  assigned_to: string | null;
   acknowledged_at: string | null;
   acknowledged_by: string | null;
   resolved_at: string | null;
   resolved_by: string | null;
+  resolution_note: string | null;
+}
+
+/** Someone a project's alerts can be assigned to. */
+export interface Assignee {
+  id: string;
+  name: string;
+  email: string;
 }
 
 /** This server's alert settings (SPANPORT_ALERT_*): how often rules are checked and their limits. */
@@ -115,7 +132,22 @@ export async function acknowledgeEvent(eventId: string): Promise<void> {
   await apiResponse(`${eventPath(eventId)}${ACKNOWLEDGE_SUFFIX}`, { method: "POST" });
 }
 
-/** Resolve an open alert by hand. */
-export async function resolveEvent(eventId: string): Promise<void> {
-  await apiResponse(`${eventPath(eventId)}${RESOLVE_SUFFIX}`, { method: "POST" });
+/** Resolve an open alert, with a note on what was found (may be empty). */
+export async function resolveEvent(eventId: string, note: string): Promise<void> {
+  await apiResponse(`${eventPath(eventId)}${RESOLVE_SUFFIX}`, { method: "POST", body: { note } });
+}
+
+/**
+ * Give an open alert to someone; they are emailed.
+ *
+ * @throws ApiError 400 when that person can't take this project's alerts.
+ */
+export async function assignEvent(eventId: string, userId: string): Promise<void> {
+  await apiResponse(`${eventPath(eventId)}${ASSIGN_SUFFIX}`, { method: "POST", body: { user_id: userId } });
+}
+
+/** Everyone the project's alerts can be assigned to, by name. */
+export function fetchAssignees(projectId: string, signal: AbortSignal): Promise<Page<Assignee>> {
+  const query = new URLSearchParams({ project_id: projectId });
+  return apiJson<Page<Assignee>>(`${ALERT_ASSIGNEES_PATH}?${query.toString()}`, { signal });
 }

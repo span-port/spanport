@@ -32,6 +32,16 @@ export const RANGE_INCOMPLETE_MESSAGE = "Enter a start and an end.";
 export const RANGE_ORDER_MESSAGE = "The end must be after the start.";
 export const RANGE_TOO_OLD_MESSAGE = "Logs are kept 7 days. Choose a start within the last 7 days.";
 
+// The Logs screen's time ranges (see lib/timeRange RangeRules).
+export const LOG_RANGE_RULES = {
+  presets: TIME_PRESETS,
+  defaultKey: DEFAULT_PRESET_KEY,
+  maxMinutes: MAX_RANGE_MINUTES,
+  keptNote: "logs kept 7 days",
+  tooLongMessage: RANGE_TOO_LONG_MESSAGE,
+  tooOldMessage: RANGE_TOO_OLD_MESSAGE,
+} as const;
+
 export const SEARCH_PAGE_SIZE = 100;
 // Matches the server's limits on filter chips and the text query.
 export const MAX_FILTER_CHIPS = 20;

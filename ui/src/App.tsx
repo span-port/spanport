@@ -7,12 +7,16 @@ import {
   ACCEPT_INVITE_ROUTE,
   ALERTS_ROUTE,
   ANY_ROUTE,
+  API_DETAIL_ROUTE,
   API_KEYS_ROUTE,
   APIS_ROUTE,
+  DATA_ROUTE,
+  ERRORS_ROUTE,
   LOGIN_ROUTE,
   LOGS_ROUTE,
   PROJECTS_ROUTE,
   REQUESTS_ROUTE,
+  SERVICE_MAP_ROUTE,
   SETUP_ROUTE,
   TRACE_ROUTE,
   USERS_ROUTE,
@@ -20,9 +24,11 @@ import {
 import { AlertsPage } from "./features/alerts";
 import { ApiKeysPage } from "./features/apiKeys";
 import { AcceptInvitePage, LoginPage, SetupPage, useCurrentUser } from "./features/auth";
-import { ApisPage } from "./features/endpoints";
+import { ApiDetailPage, ApisPage, ServiceMapPage } from "./features/endpoints";
+import { ErrorsPage } from "./features/errors";
 import { LogsPage } from "./features/logs";
 import { ProjectsPage } from "./features/projects";
+import { DataPage } from "./features/storage";
 import { TeamPage } from "./features/team";
 import { RequestsPage, TracePage } from "./features/traces";
 import { useScrollToTopOnNavigate } from "./hooks/useScrollToTopOnNavigate";
@@ -79,6 +85,17 @@ function SignedInApp() {
           <Route path={REQUESTS_ROUTE} element={<RequestsPage />} />
           <Route path={TRACE_ROUTE} element={<TracePage />} />
           <Route path={APIS_ROUTE} element={<ApisPage />} />
+          <Route path={API_DETAIL_ROUTE} element={<ApiDetailPage />} />
+          <Route path={SERVICE_MAP_ROUTE} element={<ServiceMapPage />} />
+          <Route path={ERRORS_ROUTE} element={<ErrorsPage />} />
+          <Route
+            path={DATA_ROUTE}
+            element={
+              <ManagersOnly role={role} title="Data">
+                <DataPage />
+              </ManagersOnly>
+            }
+          />
           <Route
             path={USERS_ROUTE}
             element={

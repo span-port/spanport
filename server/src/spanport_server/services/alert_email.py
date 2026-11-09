@@ -41,14 +41,18 @@ from spanport_server.core.constants import (
 from spanport_server.schemas.alert import AlertRuleRecord
 from spanport_server.schemas.tenant import ProjectItem
 
-OPEN_ALERTS_HINT = "Open Alerts in Spanport to say you're on it or to resolve it."
+OPEN_ALERTS_HINT = "Open Alerts in Spanport to say you're on it, assign it, or resolve it."
+STILL_OPEN_HINT = (
+    "The alert stays open until someone resolves it in Spanport with a note on what they found."
+)
 
 
 class EmailKind(StrEnum):
     """Which alert email this is; decides the label and colour."""
 
     FIRING = "Firing"
-    RESOLVED = "Resolved"
+    BACK_TO_NORMAL = "Back to normal"
+    ASSIGNED = "Assigned to you"
     TEST = "Test"
 
 
@@ -83,13 +87,15 @@ class AlertEmail:
 
 
 def accent_color(kind: EmailKind) -> str:
-    """The colour of the strip, label and main button: red firing, green resolved, teal test."""
+    """The colour of the strip, label and main button: red firing, green back to normal, teal
+    for assignments and tests.
+    """
     match kind:
         case EmailKind.FIRING:
             return EMAIL_FIRING_COLOR
-        case EmailKind.RESOLVED:
+        case EmailKind.BACK_TO_NORMAL:
             return EMAIL_RESOLVED_COLOR
-        case EmailKind.TEST:
+        case EmailKind.ASSIGNED | EmailKind.TEST:
             return EMAIL_TEST_COLOR
 
 
@@ -157,27 +163,49 @@ def fired_email(
     )
 
 
-def resolved_email(
+def back_to_normal_email(
     rule: AlertRuleRecord,
     project: ProjectItem,
     matched: int,
-    resolved_at: datetime,
+    recovered_at: datetime,
     ui_url: str | None = None,
 ) -> AlertEmail:
-    """The email for an alert that resolved itself."""
+    """The email for an open alert whose logs are back within the rule. It stays open."""
     return AlertEmail(
-        kind=EmailKind.RESOLVED,
-        subject=f"{ALERT_EMAIL_SUBJECT_PREFIX} Resolved: {rule.name}",
+        kind=EmailKind.BACK_TO_NORMAL,
+        subject=f"{ALERT_EMAIL_SUBJECT_PREFIX} Back to normal: {rule.name}",
         heading=rule.name,
         summary=(
             f"Back within the limit: {matched} log lines in the last {rule.window_minutes} minutes."
         ),
         details=(
             *rule_details(rule, project),
-            Detail("Resolved", resolved_at.strftime(EMAIL_TIME_FORMAT)),
+            Detail("Back to normal", recovered_at.strftime(EMAIL_TIME_FORMAT)),
         ),
-        footer="Nothing to do. The alert resolved itself.",
-        links=alert_links(ui_url, rule, resolved_at),
+        footer=STILL_OPEN_HINT,
+        links=alert_links(ui_url, rule, recovered_at),
+    )
+
+
+def assigned_email(
+    rule: AlertRuleRecord,
+    project: ProjectItem,
+    assigned_by: str,
+    assigned_at: datetime,
+    ui_url: str | None = None,
+) -> AlertEmail:
+    """The email to the person an alert was just assigned to."""
+    return AlertEmail(
+        kind=EmailKind.ASSIGNED,
+        subject=f"{ALERT_EMAIL_SUBJECT_PREFIX} Assigned to you: {rule.name}",
+        heading=rule.name,
+        summary=f"{assigned_by} assigned this alert to you.",
+        details=(
+            *rule_details(rule, project),
+            Detail("Assigned", assigned_at.strftime(EMAIL_TIME_FORMAT)),
+        ),
+        footer="Look into it, then resolve it in Spanport with a note on what you found.",
+        links=alert_links(ui_url, rule, assigned_at),
     )
 
 

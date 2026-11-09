@@ -5,10 +5,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from spanport_server.repositories.postgres.alert_assignee_repository import AlertAssigneeRepository
 from spanport_server.repositories.postgres.alert_event_repository import AlertEventRepository
 from spanport_server.repositories.postgres.alert_rule_repository import AlertRuleRepository
 from spanport_server.repositories.postgres.tenant_repository import TenantRepository
+from spanport_server.repositories.postgres.user_repository import UserRepository
 from spanport_server.schemas.alert import AlertRuleFields, AlertState
+from spanport_server.schemas.auth import UserRecord
 from spanport_server.schemas.tenant import ProjectRef
 
 pytestmark = pytest.mark.anyio
@@ -49,10 +52,21 @@ async def test_due_rules_are_claimed_once_until_their_next_check(
     assert await rules.count_rules(project.org_id, project.project_id) == 1
 
 
-async def test_one_open_alert_per_rule_then_acknowledge_and_resolve(
+async def make_owner(sessionmaker: async_sessionmaker[AsyncSession]) -> UserRecord:
+    users = UserRepository(sessionmaker)
+    await users.insert_setup_token("setup-hash", NOW + timedelta(hours=1))
+    owner = await users.create_owner(
+        "setup-hash", NOW, "acme", "Priya", "priya@example.com", "argon2-hash"
+    )
+    assert owner is not None
+    return owner
+
+
+async def test_one_open_alert_per_rule_back_to_normal_assigned_then_resolved(
     postgres_sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     project = await make_project(postgres_sessionmaker)
+    owner = await make_owner(postgres_sessionmaker)
     rule = await AlertRuleRepository(postgres_sessionmaker).insert_rule(
         project.org_id, project.project_id, SETTINGS, NOW
     )
@@ -61,18 +75,29 @@ async def test_one_open_alert_per_rule_then_acknowledge_and_resolve(
     opened = await alerts.open_alert(project.org_id, rule.id, 21)
     duplicate = await alerts.open_alert(project.org_id, rule.id, 30)
     assert opened is not None
-    resolved = await alerts.resolve(project.org_id, opened.id, None, NOW)
+    assert await alerts.mark_recovered(project.org_id, opened.id, NOW)
+    assert not await alerts.mark_recovered(project.org_id, opened.id, NOW)
+    still_open = await alerts.find_open(project.org_id, rule.id)
+    assert await alerts.assign(project.org_id, opened.id, owner.id)
+    resolved = await alerts.resolve(project.org_id, opened.id, owner.id, NOW, "Rotated the key")
     reopened = await alerts.open_alert(project.org_id, rule.id, 25)
 
     assert duplicate is None
+    assert still_open is not None and still_open.recovered_at == NOW
     assert resolved
     assert reopened is not None
+    assert await alerts.find_event_rule(project.org_id, opened.id) == rule
     listed = await alerts.list_events(project.org_id, project.project_id, None, 10)
     assert [(a.state, a.matched_count) for a in listed] == [
         (AlertState.FIRING, 25),
         (AlertState.RESOLVED, 21),
     ]
-    assert listed[1].resolved_by is None
+    assert (listed[1].assigned_to, listed[1].resolved_by) == ("Priya", "Priya")
+    assert listed[1].resolution_note == "Rotated the key"
+    assignees = await AlertAssigneeRepository(postgres_sessionmaker).list_assignees(
+        project.org_id, project.project_id
+    )
+    assert [person.email for person in assignees] == ["priya@example.com"]
 
 
 async def test_rules_and_alerts_go_with_their_project_and_stay_in_their_org(

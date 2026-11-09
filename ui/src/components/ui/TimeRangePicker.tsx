@@ -1,6 +1,6 @@
-import { TIME_PRESETS } from "../../../constants/logs";
-import { timeZoneChoices } from "../../../lib/formatTime";
-import { rangeName, type RangeSelection } from "../../../lib/timeRange";
+import { LOG_RANGE_RULES } from "../../constants/logs";
+import { timeZoneChoices } from "../../lib/formatTime";
+import { rangeName, type RangeRules, type RangeSelection } from "../../lib/timeRange";
 
 interface TimeRangePickerProps {
   range: RangeSelection;
@@ -9,16 +9,18 @@ interface TimeRangePickerProps {
   onSelectRange: (range: RangeSelection) => void;
   onSelectTimeZone: (timeZone: string) => void;
   onToggleCustom: () => void;
+  /** The screen's quick ranges and how long its data is kept; Logs' by default. */
+  rules?: RangeRules;
 }
 
 /** Quick ranges as buttons, a Custom button for anything else, and the timezone. */
-export function TimeRangePicker(props: TimeRangePickerProps) {
+export function TimeRangePicker({ rules = LOG_RANGE_RULES, ...props }: TimeRangePickerProps) {
   const { range, timeZone } = props;
   const custom = range.kind !== "preset";
   return (
     <div className="range-picker">
       <div className="range-picker-meta">
-        <span>Time range · logs kept 7 days</span>
+        <span>Time range · {rules.keptNote}</span>
         <label className="range-zone">
           Timezone
           <select
@@ -37,7 +39,7 @@ export function TimeRangePicker(props: TimeRangePickerProps) {
         </label>
       </div>
       <div role="group" aria-label="Time range" className="segmented">
-        {TIME_PRESETS.map((preset) => (
+        {rules.presets.map((preset) => (
           <button
             key={preset.key}
             type="button"
@@ -58,7 +60,7 @@ export function TimeRangePicker(props: TimeRangePickerProps) {
           aria-expanded={props.customOpen}
           onClick={props.onToggleCustom}
         >
-          {custom ? rangeName(range, timeZone) : "Custom"} ▾
+          {custom ? rangeName(range, timeZone, rules) : "Custom"} ▾
         </button>
       </div>
     </div>

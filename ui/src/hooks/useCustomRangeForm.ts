@@ -8,12 +8,11 @@ import {
   CUSTOM_RANGE_START_MINUTES,
   DEFAULT_RELATIVE_AMOUNT,
   DEFAULT_RELATIVE_UNIT,
-  MAX_RANGE_MINUTES,
   RELATIVE_UNITS,
-} from "../../../constants/logs";
-import { HOURS_MINUTES_LENGTH, MS_PER_MINUTE } from "../../../constants/ui";
-import { utcToZonedInputs, zonedInputsToUtc } from "../../../lib/formatTime";
-import { rangeProblem, type RangeSelection } from "../../../lib/timeRange";
+} from "../constants/logs";
+import { HOURS_MINUTES_LENGTH, MS_PER_MINUTE } from "../constants/ui";
+import { utcToZonedInputs, zonedInputsToUtc } from "../lib/formatTime";
+import { rangeProblem, type RangeRules, type RangeSelection } from "../lib/timeRange";
 
 const unitValues = RELATIVE_UNITS.map((choice) => choice.unit) as [
   (typeof RELATIVE_UNITS)[number]["unit"],
@@ -63,13 +62,15 @@ function initialValues(range: RangeSelection, timeZone: string, nowMs: number): 
 /**
  * Form state for the custom range dialog.
  *
- * @param onApply - Called with a valid range; problems (end before start, older than 7 days)
- *   are shown instead.
+ * @param onApply - Called with a valid range; problems (end before start, older than the data is
+ *   kept) are shown instead.
+ * @param rules - The screen's ranges and how far back its data goes.
  */
 export function useCustomRangeForm(
   range: RangeSelection,
   timeZone: string,
   onApply: (range: RangeSelection) => void,
+  rules: RangeRules,
 ) {
   const [openedAtMs] = useState(Date.now);
   const form = useForm<CustomRangeInput, unknown, CustomRangeValues>({
@@ -81,13 +82,13 @@ export function useCustomRangeForm(
   const submit = (event?: BaseSyntheticEvent) =>
     form.handleSubmit((values) => {
       const chosen = toRange(values, timeZone);
-      const problem = rangeProblem(chosen, Date.now());
+      const problem = rangeProblem(chosen, Date.now(), rules);
       if (problem) form.setError("root", { message: problem });
       else onApply(chosen);
     })(event);
-  // The pickers offer days from 7 days ago (retention) to today, in the chosen zone.
+  // The pickers offer days from the start of retention to today, in the chosen zone.
   const today = utcToZonedInputs(openedAtMs, timeZone).date;
-  const earliestDay = utcToZonedInputs(openedAtMs - MAX_RANGE_MINUTES * MS_PER_MINUTE, timeZone).date;
+  const earliestDay = utcToZonedInputs(openedAtMs - rules.maxMinutes * MS_PER_MINUTE, timeZone).date;
   return {
     register: form.register,
     control: form.control,

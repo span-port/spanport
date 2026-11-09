@@ -1,13 +1,20 @@
 // A project's rules and alerts, and the actions on them. Every change reloads both lists.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ALERT_EVENTS_QUERY_KEY, ALERT_RULES_QUERY_KEY, ALERT_SETTINGS_QUERY_KEY } from "../../../constants/api";
+import {
+  ALERT_ASSIGNEES_QUERY_KEY,
+  ALERT_EVENTS_QUERY_KEY,
+  ALERT_RULES_QUERY_KEY,
+  ALERT_SETTINGS_QUERY_KEY,
+} from "../../../constants/api";
 import { DEFAULT_ALERT_LIMITS, MS_PER_SECOND } from "../../../constants/alerts";
 import { settingsOf } from "../../../lib/alerts";
 import {
   acknowledgeEvent,
+  assignEvent,
   deleteRule,
   fetchAlertLimits,
+  fetchAssignees,
   fetchEvents,
   fetchRules,
   resolveEvent,
@@ -15,6 +22,7 @@ import {
   updateRule,
   type AlertLimits,
   type AlertRule,
+  type Assignee,
 } from "../api";
 
 /** The server's alert settings, read once per visit; its defaults until they arrive. */
@@ -57,19 +65,39 @@ function useReloadAlerts() {
     ]);
 }
 
-/** "I'm on it" and "Mark resolved" on an alert. */
+/** Who the project's alerts can be assigned to; loaded only for people who can assign. */
+export function useAssignees(projectId: string | null, canAssign: boolean): Assignee[] {
+  const { data } = useQuery({
+    queryKey: [ALERT_ASSIGNEES_QUERY_KEY, projectId],
+    queryFn: ({ signal }) => fetchAssignees(projectId ?? "", signal),
+    enabled: projectId !== null && canAssign,
+  });
+  return data?.data ?? [];
+}
+
+/** "I'm on it", "Assign to" and "Resolve" (with a note) on an alert. */
 export function useAlertActions() {
   const reload = useReloadAlerts();
   const acknowledge = useMutation({ mutationFn: acknowledgeEvent, onSettled: reload });
-  const resolve = useMutation({ mutationFn: resolveEvent, onSettled: reload });
+  const assign = useMutation({
+    mutationFn: ({ eventId, userId }: { eventId: string; userId: string }) => assignEvent(eventId, userId),
+    onSettled: reload,
+  });
+  const resolve = useMutation({
+    mutationFn: ({ eventId, note }: { eventId: string; note: string }) => resolveEvent(eventId, note),
+    onSettled: reload,
+  });
   return {
     acknowledge: (eventId: string) => {
       acknowledge.mutate(eventId);
     },
-    resolve: (eventId: string) => {
-      resolve.mutate(eventId);
+    assign: (eventId: string, userId: string) => {
+      assign.mutate({ eventId, userId });
     },
-    error: acknowledge.error ?? resolve.error,
+    resolve: (eventId: string, note: string) => {
+      resolve.mutate({ eventId, note });
+    },
+    error: acknowledge.error ?? assign.error ?? resolve.error,
   };
 }
 

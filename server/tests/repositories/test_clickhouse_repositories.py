@@ -5,13 +5,20 @@ import pytest
 from clickhouse_connect.driver.asyncclient import AsyncClient
 
 from spanport_server.core.ids import UuidV7, new_id
+from spanport_server.repositories.clickhouse.endpoint_detail_repository import (
+    EndpointDetailRepository,
+)
 from spanport_server.repositories.clickhouse.endpoint_repository import EndpointRepository
+from spanport_server.repositories.clickhouse.error_repository import ErrorRepository
 from spanport_server.repositories.clickhouse.log_repository import LogRepository
 from spanport_server.repositories.clickhouse.project_data_repository import ProjectDataRepository
 from spanport_server.repositories.clickhouse.schema_repository import ClickHouseSchemaRepository
+from spanport_server.repositories.clickhouse.service_map_repository import ServiceMapRepository
 from spanport_server.repositories.clickhouse.span_repository import SpanRepository
 from spanport_server.repositories.clickhouse.span_search_repository import SpanSearchRepository
+from spanport_server.repositories.clickhouse.storage_repository import StorageRepository
 from spanport_server.schemas.endpoint import EndpointQuery
+from spanport_server.schemas.errors import StatusRange
 from spanport_server.schemas.log_row import LogRow
 from spanport_server.schemas.span_row import SpanRow
 from spanport_server.schemas.trace import RequestQuery
@@ -170,6 +177,161 @@ async def test_endpoint_sums_split_the_time_by_kind_of_step(
     assert (row.db_ns, row.external_ns, row.llm_ns) == (10_000_000, 20_000_000, 0)
     assert (totals.requests, totals.errors) == (1, 1)
     assert other_service == []
+
+    one = replace(query, service="hr-portal-api", http_method="GET", route="/users/:id")
+    details = EndpointDetailRepository(clickhouse_client)
+    summary = await details.summary_row(one)
+    (point,) = await details.timeline(one, 60)
+    steps = await details.steps(one, 10)
+    (slowest,) = await details.slowest(one, 5)
+
+    assert summary is not None and summary.requests == 1
+    assert (point.requests, point.errors) == (1, 1)
+    assert await details.statuses(one) == [(500, 1)]
+    assert {(step.category, step.calls) for step in steps} == {("db", 1), ("client", 2)}
+    assert (slowest.trace_id, slowest.http_status, slowest.error) == (request.trace_id, 500, True)
+    assert await details.summary_row(replace(one, route="/other")) is None
+    (slow,) = await endpoints.slow_queries(query, 10)
+    assert (slow.route, slow.statement, slow.calls, slow.requests) == (
+        "/users/:id",
+        "GET /users/:id",
+        1,
+        1,
+    )
+
+
+async def test_http_errors_per_interval_and_one_intervals_failing_requests(
+    clickhouse_client: AsyncClient,
+) -> None:
+    schema = ClickHouseSchemaRepository(clickhouse_client)
+    for version in schema.available_versions():
+        await schema.apply(version)
+    log = sample_row("database timeout")
+    failed = replace(
+        sample_span("GET /users/:id", log.org_id, log.project_id),
+        trace_id=log.trace_id,
+        attributes={"client.address": "10.0.0.7"},
+    )
+    not_found = replace(failed, trace_id="1" * 32, span_id="00f067aa0ba902b7", http_status=404)
+    fine = replace(failed, trace_id="2" * 32, span_id="00f067aa0ba902b8", http_status=200)
+    await SpanRepository(clickhouse_client).insert_spans([failed, not_found, fine])
+    await LogRepository(clickhouse_client).insert_logs(
+        [log, replace(log, log_id=new_id(), level="INFO", severity_number=9, message="started")]
+    )
+    query = EndpointQuery(
+        org_id=log.org_id,
+        project_id=log.project_id,
+        start=datetime.now(UTC) - timedelta(hours=1),
+        end=datetime.now(UTC) + timedelta(minutes=1),
+        service="",
+    )
+    errors = ErrorRepository(clickhouse_client)
+
+    (point,) = await errors.buckets(query, 3600)
+    (api,) = await errors.failing_apis(query, 10)
+    server_only = StatusRange(500, 600)
+    (group,) = await errors.groups(query, server_only, 10)
+    (request,) = await errors.failed_requests(query, server_only, 10)
+
+    assert (point.requests, point.client_errors, point.server_errors) == (3, 1, 1)
+    assert (api.route, api.errors) == ("/users/:id", 2)
+    assert await errors.window_total(query, StatusRange(400, 600)) == 2
+    assert (group.status, group.route, group.requests) == (500, "/users/:id", 1)
+    assert (request.http_status, request.client_ip) == (500, "10.0.0.7")
+    assert await errors.logged_lines(query, [log.trace_id]) == {log.trace_id: "database timeout"}
+    assert await errors.logged_lines(query, []) == {}
+
+
+async def test_service_map_rows_name_what_each_service_calls(
+    clickhouse_client: AsyncClient,
+) -> None:
+    schema = ClickHouseSchemaRepository(clickhouse_client)
+    for version in schema.available_versions():
+        await schema.apply(version)
+    org_id, project_id = new_id(), new_id()
+    request = sample_span("GET /users/:id", org_id, project_id)
+    database = replace(
+        request,
+        span_id="00f067aa0ba902b7",
+        parent_span_id=request.span_id,
+        kind="CLIENT",
+        category="db",
+        http_status=0,
+        status_code="UNSET",
+        attributes={"db.system.name": "postgresql", "db.namespace": "kosha"},
+    )
+    # Stored before ingest knew db.system.name: filed as an outgoing call to "localhost".
+    filed_as_outgoing = replace(
+        database,
+        span_id="00f067aa0ba902c1",
+        category="client",
+        attributes=database.attributes | {"server.address": "localhost"},
+    )
+    billing_call = replace(
+        database,
+        span_id="00f067aa0ba902b8",
+        category="client",
+        attributes={"server.address": "billing.internal"},
+    )
+    billing = replace(
+        request,
+        span_id="00f067aa0ba902b9",
+        parent_span_id=billing_call.span_id,
+        service="billing",
+        http_status=200,
+        status_code="UNSET",
+    )
+    mail = replace(
+        database,
+        span_id="00f067aa0ba902c0",
+        category="client",
+        attributes={"url.full": "https://api.mailgun.net/v3/messages"},
+    )
+    await SpanRepository(clickhouse_client).insert_spans(
+        [request, database, filed_as_outgoing, billing_call, billing, mail]
+    )
+    query = EndpointQuery(
+        org_id=org_id,
+        project_id=project_id,
+        start=datetime.now(UTC) - timedelta(hours=1),
+        end=datetime.now(UTC) + timedelta(minutes=1),
+        service="",
+    )
+
+    rows = await ServiceMapRepository(clickhouse_client).map_rows(query, 10)
+
+    assert {(row.service, row.stats.calls, row.stats.errors) for row in rows.services} == {
+        ("hr-portal-api", 1, 1),
+        ("billing", 1, 0),
+    }
+    assert {(row.service, row.category, row.target, row.stats.calls) for row in rows.steps} == {
+        ("hr-portal-api", "db", "postgresql · kosha", 2),
+        ("hr-portal-api", "client", "api.mailgun.net", 1),
+    }
+    assert [(row.caller, row.callee) for row in rows.service_calls] == [
+        ("hr-portal-api", "billing")
+    ]
+
+
+async def test_storage_counts_rows_per_project_of_one_org_and_sizes_rows(
+    clickhouse_client: AsyncClient,
+) -> None:
+    schema = ClickHouseSchemaRepository(clickhouse_client)
+    for version in schema.available_versions():
+        await schema.apply(version)
+    mine, other_org = sample_row("one"), sample_row("someone else's")
+    second = replace(mine, log_id=new_id(), message="two")
+    await LogRepository(clickhouse_client).insert_logs([mine, second, other_org])
+    storage = StorageRepository(clickhouse_client)
+
+    (rows,) = await storage.log_rows(mine.org_id)
+    span_rows = await storage.span_rows(mine.org_id)
+
+    assert (rows.project_id, rows.rows) == (mine.project_id, 2)
+    assert rows.oldest <= rows.newest
+    assert span_rows == []
+    assert await storage.bytes_per_row("logs") > 0
+    assert await storage.bytes_per_row("spans") == 0
 
 
 def sample_span(name: str, org_id: UuidV7, project_id: UuidV7) -> SpanRow:

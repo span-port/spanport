@@ -10,8 +10,10 @@ from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.exceptions import OperationalError
 
 from spanport_server.core.constants import (
+    DB_QUERY_TEXT_ATTRIBUTES,
     FIRST_SERVER_ERROR_STATUS,
     LAYER_SPAN_SLACK,
+    MAX_STATEMENT_LENGTH,
     QUANTILE_SLOW,
     QUANTILE_SLOWEST,
     QUANTILE_TYPICAL,
@@ -24,14 +26,20 @@ from spanport_server.core.constants import (
     STORAGE_UNAVAILABLE_DETAIL,
 )
 from spanport_server.core.errors import StorageUnavailableError
-from spanport_server.schemas.endpoint import EndpointQuery, EndpointRow, TotalsRow
+from spanport_server.schemas.endpoint import EndpointQuery, EndpointRow, QueryRow, TotalsRow
 
 TENANT_SQL = "org_id = {org_id:UUID} AND project_id = {project_id:UUID}"
 SERVICE_SQL = " AND service = {service:String}"
+# One endpoint (the API detail page): its service, method and route.
+ENDPOINT_SQL = (
+    " AND service = {service:String} AND http_method = {http_method:String} "
+    "AND route = {route:String}"
+)
 # Built only from fixed names and {placeholder} markers; every value is a bound parameter.
 # An endpoint is the route when the framework reported one, else the span name.
 INCOMING_SQL = (
-    "SELECT trace_id, service, http_method, if(http_route != '', http_route, name) AS route, "  # noqa: S608
+    "SELECT trace_id, span_id, start_ts, service, http_method, http_status, "  # noqa: S608
+    "if(http_route != '', http_route, name) AS route, "
     "(status_code = {error_status:String} OR http_status >= {first_server_error:UInt16}) "
     "AS failed, duration_ns "
     f"FROM {SPANS_TABLE} WHERE {TENANT_SQL} AND category = {{incoming:String}} "
@@ -66,6 +74,27 @@ ENDPOINTS_SQL = (
     "GROUP BY r.service, r.http_method, r.route "
     "ORDER BY requests DESC, r.route LIMIT {limit:UInt32}"
 )
+# Database queries across all endpoints: the query text (current OpenTelemetry name, then the
+# older one, else the span name), cut to a readable length, per endpoint that runs it.
+QUERY_SPANS_SQL = (
+    "SELECT trace_id, service, duration_ns, substring("  # noqa: S608
+    "if(attributes[{query_text_key:String}] != '', attributes[{query_text_key:String}], "
+    "if(attributes[{statement_key:String}] != '', attributes[{statement_key:String}], name)), "
+    "1, {max_statement:UInt32}) AS statement "
+    f"FROM {SPANS_TABLE} WHERE {TENANT_SQL} AND category = {{db:String}} "
+    "AND start_ts >= {start:DateTime64(6, 'UTC')} "
+    "AND start_ts < {steps_end:DateTime64(6, 'UTC')}"
+)
+SLOW_QUERIES_SQL = (
+    "SELECT r.service, r.http_method, r.route, s.statement, count(), "  # noqa: S608
+    "uniqExact(s.trace_id), avg(s.duration_ns), quantile({slow:Float64})(s.duration_ns), "
+    "sum(s.duration_ns) AS total_ns "
+    f"FROM ({QUERY_SPANS_SQL}) AS s "
+    "INNER JOIN (SELECT DISTINCT trace_id, service, http_method, route "
+    f"FROM ({INCOMING_SQL})) AS r ON s.trace_id = r.trace_id AND s.service = r.service "
+    "GROUP BY r.service, r.http_method, r.route, s.statement "
+    "ORDER BY total_ns DESC LIMIT {limit:UInt32}"
+)
 TOTALS_SQL = (
     "SELECT count(), countIf(failed), "  # noqa: S608
     "if(count() = 0, 0, quantile({slow:Float64})(duration_ns)) "
@@ -93,11 +122,15 @@ def endpoint_parameters(query: EndpointQuery) -> dict[str, Any]:
     }
     if query.service:
         parameters["service"] = query.service
+    if query.route:
+        parameters.update(http_method=query.http_method, route=query.route)
     return parameters
 
 
 def with_service_filter(sql: str, query: EndpointQuery) -> str:
-    """The SQL with the service condition in place, or none when no service is chosen."""
+    """The SQL narrowed to one endpoint, or one service, or nothing more."""
+    if query.route:
+        return sql.replace("{service_filter}", ENDPOINT_SQL)
     return sql.replace("{service_filter}", SERVICE_SQL if query.service else "")
 
 
@@ -158,6 +191,34 @@ class EndpointRepository:
         rows = await self._rows(with_service_filter(TOTALS_SQL, query), endpoint_parameters(query))
         requests, errors, p95_ns = rows[0]
         return TotalsRow(requests=requests, errors=errors, p95_ns=p95_ns)
+
+    async def slow_queries(self, query: EndpointQuery, limit: int) -> list[QueryRow]:
+        """The database queries with the most total time, per endpoint that runs them.
+
+        Raises:
+            StorageUnavailableError: ClickHouse can't be reached.
+        """
+        parameters = endpoint_parameters(query) | {
+            "limit": limit,
+            "query_text_key": DB_QUERY_TEXT_ATTRIBUTES[0],
+            "statement_key": DB_QUERY_TEXT_ATTRIBUTES[1],
+            "max_statement": MAX_STATEMENT_LENGTH,
+        }
+        rows = await self._rows(with_service_filter(SLOW_QUERIES_SQL, query), parameters)
+        return [
+            QueryRow(
+                service=service,
+                http_method=method,
+                route=route,
+                statement=statement,
+                calls=calls,
+                requests=requests,
+                avg_ns=avg,
+                p95_ns=p95,
+                total_ns=total,
+            )
+            for service, method, route, statement, calls, requests, avg, p95, total in rows
+        ]
 
     async def _rows(self, sql: str, parameters: dict[str, Any]) -> list[Sequence[Any]]:
         try:

@@ -5,10 +5,11 @@ from spanport_server.core.ids import new_id
 from spanport_server.schemas.alert import AlertRuleRecord
 from spanport_server.schemas.tenant import ProjectItem
 from spanport_server.services.alert_email import (
+    assigned_email,
+    back_to_normal_email,
     fired_email,
     render_html,
     render_text,
-    resolved_email,
     send_test_email,
 )
 
@@ -44,11 +45,16 @@ def test_a_firing_email_says_what_matched_where_and_since_when() -> None:
     assert "#e5484d" in html  # red strip and label
 
 
-def test_resolved_and_test_emails_use_their_own_label_and_colour() -> None:
-    resolved = render_html(resolved_email(rule(), PROJECT, 3, FIRED_AT))
+def test_back_to_normal_assigned_and_test_emails_use_their_own_label_and_colour() -> None:
+    recovered = back_to_normal_email(rule(), PROJECT, 3, FIRED_AT)
+    assigned = assigned_email(rule(), PROJECT, "Sam", FIRED_AT)
     tested = render_html(send_test_email(rule(), PROJECT, FIRED_AT))
 
-    assert "Resolved" in resolved and "#30a46c" in resolved
+    assert recovered.subject == "[Spanport] Back to normal: Too many errors"
+    assert "Back to normal" in render_html(recovered) and "#30a46c" in render_html(recovered)
+    assert "stays open until someone resolves it" in render_text(recovered)
+    assert assigned.subject == "[Spanport] Assigned to you: Too many errors"
+    assert "Sam assigned this alert to you." in render_text(assigned)
     assert "Test" in tested and "#12a594" in tested
 
 

@@ -2,11 +2,11 @@ import { useState } from "react";
 import { Link } from "react-router";
 
 import { Button } from "../../../components/ui/Button";
+import { CustomRangeDialog } from "../../../components/ui/CustomRangeDialog";
+import { TimeRangePicker } from "../../../components/ui/TimeRangePicker";
 import { canManageAlertRules, newAlertLink } from "../../../lib/alerts";
 import { useCurrentUser } from "../../auth";
 import type { LogExplorer, StreamState } from "../hooks/useLogExplorer";
-import { CustomRangeDialog } from "./CustomRangeDialog";
-import { TimeRangePicker } from "./TimeRangePicker";
 
 /**
  * Title, live badge, the time range, pause / resume, and (owners and admins) Create alert from

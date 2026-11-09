@@ -95,7 +95,8 @@ SPAN_CATEGORY_CLIENT = "client"
 SPAN_CATEGORY_INCOMING = "incoming_request"
 SPAN_CATEGORY_CODE = "code"
 GEN_AI_ATTRIBUTE_PREFIX = "gen_ai."
-DB_SYSTEM_ATTRIBUTE = "db.system"
+# A database call names its database system: the current OpenTelemetry name, then the older one.
+DB_SYSTEM_ATTRIBUTES = ("db.system.name", "db.system")
 # HTTP attributes: the current OpenTelemetry names first, then the older ones still sent by
 # many libraries.
 HTTP_METHOD_ATTRIBUTES = ("http.request.method", "http.method")
@@ -148,6 +149,21 @@ ENDPOINT_SUMMARY_PATH = "/api/v1/endpoints/summary"
 MAX_ENDPOINTS = 200
 # A request's steps start after it does; they are looked for this far past the range's end.
 LAYER_SPAN_SLACK = timedelta(hours=1)
+ENDPOINT_DETAIL_PATH = "/api/v1/endpoints/detail"
+MAX_HTTP_METHOD_LENGTH = 16
+# The detail page's chart has about this many points; an interval is never under a minute.
+TIMELINE_POINTS = 60
+MIN_BUCKET_SECONDS = 60
+MAX_ENDPOINT_STEPS = 25
+SLOWEST_REQUESTS = 10
+# The APIs page's "Slow queries": the database queries with the most total time.
+MAX_SLOW_QUERIES = 10
+MAX_STATEMENT_LENGTH = 500
+# A query's text: the current OpenTelemetry name, then the older one.
+DB_QUERY_TEXT_ATTRIBUTES = ("db.query.text", "db.statement")
+# Step kinds as the UI names them (database and LLM keep their category's name).
+STEP_KIND_EXTERNAL = "external"
+STEP_KIND_CODE = "code"
 QUANTILE_TYPICAL = 0.5
 QUANTILE_SLOW = 0.95
 QUANTILE_SLOWEST = 0.99
@@ -157,6 +173,42 @@ SPAN_LABEL_EXTERNAL = "external"
 # A request failed when its span status is ERROR or it answered 5xx.
 SPAN_STATUS_ERROR = "ERROR"
 FIRST_SERVER_ERROR_STATUS = 500
+
+# HTTP errors over time (the Errors screen): 4xx and 5xx answers of incoming requests.
+ERROR_SUMMARY_PATH = "/api/v1/errors/summary"
+ERROR_WINDOW_PATH = "/api/v1/errors/window"
+FIRST_CLIENT_ERROR_STATUS = 400
+# One past the last HTTP status code.
+END_HTTP_STATUS = 600
+# A chosen bar lists its newest failing requests and its (status, API) groups.
+ERROR_WINDOW_REQUESTS = 20
+MAX_ERROR_GROUPS = 50
+# The caller's address: the current OpenTelemetry name, then the older ones.
+CLIENT_ADDRESS_ATTRIBUTES = ("client.address", "http.client_ip", "net.peer.ip")
+# "What the code logged" for a failing request: its most severe log line, cut to this length.
+MAX_LOGGED_LENGTH = 300
+ROUTE_REQUIRES_SERVICE_DETAIL = "service: needed when route is given."
+
+# The service map (APIs -> Service map): what calls what, from stored spans.
+SERVICE_MAP_PATH = "/api/v1/service-map"
+MAX_MAP_EDGES = 200
+# A caller's span starts before the request it makes; it is looked for this far before the range.
+CALLER_SPAN_SLACK = timedelta(minutes=5)
+# A box or line is red above this share of failed calls, orange at this many times the slow-5%
+# time of the period before.
+MAP_ERROR_SHARE = 0.01
+MAP_SLOWER_TIMES = 2
+# Node ids: "<kind>:<name>"; your services are kind "service".
+MAP_KIND_SERVICE = "service"
+MAP_ID_SEPARATOR = ":"
+# What a database, an outgoing call and an LLM call are called on the map: the first attribute
+# with a value (current OpenTelemetry names first), else the span name.
+DB_NAMESPACE_ATTRIBUTES = ("db.namespace", "db.name")
+DB_NAME_SEPARATOR = " · "
+UNNAMED_DATABASE = "database"
+PEER_HOST_ATTRIBUTES = ("server.address", "net.peer.name", "http.host")
+PEER_URL_ATTRIBUTES = ("url.full", "http.url")
+LLM_PROVIDER_ATTRIBUTES = ("gen_ai.provider.name", "gen_ai.system")
 
 # Sign-in: first-time setup, email and password, server-side sessions
 AUTH_SETUP_PATH = "/api/v1/auth/setup"
@@ -209,6 +261,8 @@ DEFAULT_LOGIN_FAILURE_WINDOW_MINUTES = 15
 MAX_LOGIN_FAILURE_WINDOW_MINUTES = 24 * 60
 TOO_MANY_LOGINS_DETAIL = "Too many wrong passwords for this email. Try again in {minutes} min."
 RETRY_AFTER_HEADER = "Retry-After"
+# The client went away before the request was read (nginx's code for it; never seen by anyone).
+CLIENT_CLOSED_REQUEST_STATUS = 499
 SECONDS_PER_MINUTE = 60
 
 # Users and invites: owners and admins invite people, change roles and remove users.
@@ -242,6 +296,8 @@ FULL_ACCESS_ROLE_DETAIL = "Owners and admins always see every project."
 
 # Projects API
 PROJECTS_PATH = "/api/v1/projects"
+# Setup -> Data -> Storage: how much each project keeps in ClickHouse.
+STORAGE_PATH = "/api/v1/storage"
 DEFAULT_PROJECTS_LIMIT = 100
 MAX_PROJECTS_LIMIT = 500
 
@@ -327,6 +383,10 @@ ALERT_SETTINGS_PATH = "/api/v1/alert-settings"
 ALERT_EVENTS_PATH = "/api/v1/alert-events"
 ACKNOWLEDGE_ALERT_EVENT_PATH = "/api/v1/alert-events/{event_id}/acknowledge"
 RESOLVE_ALERT_EVENT_PATH = "/api/v1/alert-events/{event_id}/resolve"
+ASSIGN_ALERT_EVENT_PATH = "/api/v1/alert-events/{event_id}/assign"
+# People an alert of a project can be assigned to (members can't list users otherwise).
+ALERT_ASSIGNEES_PATH = "/api/v1/alert-assignees"
+MAX_RESOLUTION_NOTE_LENGTH = 2000
 DEFAULT_ALERTS_LIMIT = 100
 MAX_ALERTS_LIMIT = 500
 MAX_ALERT_BODY_BYTES = 16 * 1024
@@ -403,6 +463,9 @@ RESPONDER_ROLES = frozenset({"owner", "admin", "member"})
 NOT_A_RESPONDER_DETAIL = "Viewers can't acknowledge or resolve alerts."
 NO_ALERT_RULE_DETAIL = "No alert rule with this id in your organization."
 NO_OPEN_ALERT_DETAIL = "No open alert with this id in your organization."
+NO_ASSIGNEE_DETAIL = (
+    "user_id: no active owner, admin or member of your organization who can see this project."
+)
 EMAIL_NOT_SET_UP_DETAIL = (
     "Email isn't set up on this server. Set SPANPORT_SMTP_HOST and SPANPORT_SMTP_FROM."
 )

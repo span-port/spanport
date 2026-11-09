@@ -21,12 +21,19 @@ from spanport_server.core.constants import (
     SESSION_COOKIE,
 )
 from spanport_server.core.errors import NotAllowedError
+from spanport_server.repositories.clickhouse.endpoint_detail_repository import (
+    EndpointDetailRepository,
+)
 from spanport_server.repositories.clickhouse.endpoint_repository import EndpointRepository
+from spanport_server.repositories.clickhouse.error_repository import ErrorRepository
 from spanport_server.repositories.clickhouse.log_repository import LogRepository
 from spanport_server.repositories.clickhouse.log_search_repository import LogSearchRepository
 from spanport_server.repositories.clickhouse.project_data_repository import ProjectDataRepository
+from spanport_server.repositories.clickhouse.service_map_repository import ServiceMapRepository
 from spanport_server.repositories.clickhouse.span_repository import SpanRepository
 from spanport_server.repositories.clickhouse.span_search_repository import SpanSearchRepository
+from spanport_server.repositories.clickhouse.storage_repository import StorageRepository
+from spanport_server.repositories.postgres.alert_assignee_repository import AlertAssigneeRepository
 from spanport_server.repositories.postgres.alert_event_repository import AlertEventRepository
 from spanport_server.repositories.postgres.alert_rule_repository import AlertRuleRepository
 from spanport_server.repositories.postgres.api_key_repository import ApiKeyRepository
@@ -44,13 +51,17 @@ from spanport_server.services.alert_rule_service import AlertRuleService
 from spanport_server.services.api_key_auth_service import ApiKeyAuthService
 from spanport_server.services.api_key_service import ApiKeyService
 from spanport_server.services.auth_service import AuthService
+from spanport_server.services.endpoint_detail_service import EndpointDetailService
 from spanport_server.services.endpoint_service import EndpointService
+from spanport_server.services.error_service import ErrorService
 from spanport_server.services.log_export_service import LogExportService
 from spanport_server.services.log_ingest_service import LogIngestService
 from spanport_server.services.log_search_service import LogSearchService
 from spanport_server.services.log_tail_service import LogTailService
 from spanport_server.services.project_service import ProjectService
+from spanport_server.services.service_map_service import ServiceMapService
 from spanport_server.services.span_ingest_service import SpanIngestService
+from spanport_server.services.storage_service import StorageService
 from spanport_server.services.team_service import TeamService
 from spanport_server.services.trace_service import TraceService
 
@@ -120,6 +131,38 @@ def get_endpoint_service(request: Request) -> EndpointService:
     )
 
 
+def get_endpoint_detail_service(request: Request) -> EndpointDetailService:
+    """Build the API detail page service on Postgres and ClickHouse."""
+    return EndpointDetailService(
+        TenantRepository(request.app.state.postgres_sessionmaker),
+        EndpointDetailRepository(request.app.state.clickhouse_client),
+    )
+
+
+def get_error_service(request: Request) -> ErrorService:
+    """Build the HTTP errors (Errors screen) service on Postgres and ClickHouse."""
+    return ErrorService(
+        TenantRepository(request.app.state.postgres_sessionmaker),
+        ErrorRepository(request.app.state.clickhouse_client),
+    )
+
+
+def get_service_map_service(request: Request) -> ServiceMapService:
+    """Build the service map service on Postgres and ClickHouse."""
+    return ServiceMapService(
+        TenantRepository(request.app.state.postgres_sessionmaker),
+        ServiceMapRepository(request.app.state.clickhouse_client),
+    )
+
+
+def get_storage_service(request: Request) -> StorageService:
+    """Build the storage summary (Setup -> Data) service on Postgres and ClickHouse."""
+    return StorageService(
+        TenantRepository(request.app.state.postgres_sessionmaker),
+        StorageRepository(request.app.state.clickhouse_client),
+    )
+
+
 def get_log_search_service(request: Request) -> LogSearchService:
     """Build the log search service on the app's Postgres pool and ClickHouse client."""
     return LogSearchService(
@@ -184,9 +227,14 @@ def get_alert_rule_service(request: Request) -> AlertRuleService:
 
 
 def get_alert_event_service(request: Request) -> AlertEventService:
-    """Build the alerts (events) service on the app's Postgres pool."""
+    """Build the alerts (events) service on the app's Postgres pool and mail settings."""
     sessionmaker = request.app.state.postgres_sessionmaker
-    return AlertEventService(AlertEventRepository(sessionmaker), TenantRepository(sessionmaker))
+    return AlertEventService(
+        AlertEventRepository(sessionmaker),
+        TenantRepository(sessionmaker),
+        AlertAssigneeRepository(sessionmaker),
+        build_alert_notifier(request.app.state.settings),
+    )
 
 
 def get_team_service(request: Request) -> TeamService:

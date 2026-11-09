@@ -4,6 +4,7 @@ import pytest
 from fakes import (
     FakeAlertEventStore,
     FakeAlertRuleStore,
+    FakeAssigneeStore,
     FakeLogSearchStore,
     FakeLogWriter,
     FakeSessionStore,
@@ -20,6 +21,7 @@ from spanport_server.schemas.log_search import LogSearchRequest
 from spanport_server.schemas.team import AcceptInviteRequest, InviteRequest, ProjectAccess
 from spanport_server.schemas.tenant import ProjectRef
 from spanport_server.services.alert_event_service import AlertEventService
+from spanport_server.services.alert_notifier import AlertNotifier
 from spanport_server.services.auth_service import AuthService
 from spanport_server.services.log_search_service import LogSearchService
 from spanport_server.services.project_service import ProjectService
@@ -132,7 +134,7 @@ async def test_alerts_of_other_projects_cannot_be_seen_or_acknowledged(org: Org)
     rule = await rules.insert_rule(org.owner.org_id, org.globex, settings, datetime.now(UTC))
     opened = await alerts.open_alert(org.owner.org_id, rule.id, 3)
     assert opened is not None
-    events = AlertEventService(alerts, org.tenants)
+    events = AlertEventService(alerts, org.tenants, FakeAssigneeStore(), AlertNotifier(None))
 
     with pytest.raises(NotFoundError):
         await events.list_events(caller_of(member), org.globex, None, 10)

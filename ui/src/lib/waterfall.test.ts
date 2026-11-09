@@ -9,6 +9,7 @@ import {
   spanFailed,
   stepKindName,
   stepTimes,
+  tickEdge,
   traceLink,
   traceLogsLink,
   visibleRows,
@@ -80,6 +81,9 @@ describe("waterfall helpers", () => {
     expect(axisTicks(4200).map((tick) => tick.label)).toEqual(["0", "1.0 s", "2.0 s", "3.0 s", "4.0 s"]);
     expect(axisTicks(4200)[1]?.percent).toBeCloseTo(23.8, 1);
     expect(axisTicks(0)).toEqual([{ label: "0", percent: 0 }]);
+    // 186 ms: marks at 0, 50, 100 and 150 ms; 150 ms (81%) is centred, not pushed onto 100 ms.
+    expect(axisTicks(186).map((tick) => tickEdge(tick.percent))).toEqual(["start", "middle", "middle", "middle"]);
+    expect(tickEdge(95)).toBe("end");
   });
 
   it("places bars as percentages, never invisible or past the end", () => {
