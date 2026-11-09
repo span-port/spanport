@@ -16,9 +16,9 @@ from opentelemetry.sdk._logs import LoggerProvider
 from spanport._constants import (
     DATA_KEY_PREFIX,
     DEFAULT_COLLECTOR_URL,
-    DEFAULT_SERVER_URL,
     KEY_CHECK_THREAD_NAME,
 )
+from spanport._endpoints import key_check_url, warn_plain_http
 from spanport._key_check import check_data_key
 from spanport._pipeline import build_logging_handler, build_otlp_exporter
 from spanport._sdk_logger import get_sdk_logger
@@ -37,7 +37,7 @@ def init(
     data_key: str,
     service: str,
     collector_url: str = DEFAULT_COLLECTOR_URL,
-    server_url: str = DEFAULT_SERVER_URL,
+    server_url: str | None = None,
     check_key: bool = True,
     traces: bool = True,
 ) -> None:
@@ -52,7 +52,10 @@ def init(
         data_key: The project's data key (sp_ingest_...).
         service: Name of this app as shown in Spanport, e.g. "hr-portal-api".
         collector_url: Where logs and traces are sent: the Spanport OTel Collector (OTLP/HTTP).
-        server_url: The Spanport server, asked once whether the data key is valid.
+        server_url: Where the data key is checked once at start-up: your Spanport address
+            (the UI's URL; it forwards /api to the server). Without it the check uses
+            http://localhost:8000 only when the collector is on localhost too, and is
+            skipped otherwise.
         check_key: Set False to skip the start-up key check (e.g. no route to the server).
         traces: Set False to send logs only.
     """
@@ -86,7 +89,7 @@ def _start(
     data_key: str,
     service: str,
     collector_url: str,
-    server_url: str,
+    server_url: str | None,
     check_key: bool,
     traces: bool,
 ) -> None:
@@ -112,11 +115,13 @@ def _start(
     sdk_logger.info("sending %s for service %s to %s", sending, service, collector_url)
     if _active_tracing is not None and _active_tracing.optional:
         sdk_logger.info("also timing: %s", ", ".join(_active_tracing.optional))
-    if check_key:
+    check_url = key_check_url(collector_url, server_url) if check_key else None
+    warn_plain_http([collector_url] + ([check_url] if check_url else []))
+    if check_url is not None:
         # In the background, so a slow or unreachable server never delays the app's start-up.
         threading.Thread(
             target=check_data_key,
-            args=(server_url, data_key),
+            args=(check_url, data_key),
             name=KEY_CHECK_THREAD_NAME,
             daemon=True,
         ).start()

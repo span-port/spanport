@@ -89,3 +89,16 @@ def test_second_init_is_ignored(
 
     assert logging.getLogger().handlers == handlers_after_first
     assert "already called" in sdk_messages.text
+
+
+def test_a_remote_collector_without_server_url_never_sends_the_key_to_localhost(
+    monkeypatch: pytest.MonkeyPatch, sdk_messages: pytest.LogCaptureFixture
+) -> None:
+    checked: list[str] = []
+    monkeypatch.setattr(spanport, "check_data_key", lambda url, key: checked.append(url))
+
+    spanport.init(VALID_KEY, "svc", collector_url="https://collector.acme.com")
+    wait_for_key_check()
+
+    assert checked == []
+    assert "set server_url" in sdk_messages.text

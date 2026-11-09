@@ -6,12 +6,19 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fakes import FakeLogSearchStore, FakeTenantStore
 
-from spanport_server.core.errors import InvalidRequestError, NotAllowedError, NotFoundError
+from spanport_server.core.errors import (
+    InvalidRequestError,
+    NotAllowedError,
+    NotFoundError,
+    RateLimitedError,
+)
 from spanport_server.core.ids import new_id
+from spanport_server.core.rate_limiter import ConcurrencyLimiter
 from spanport_server.schemas.auth import Caller, Role
 from spanport_server.schemas.log_search import LogExportRequest, LogItem
 from spanport_server.schemas.tenant import ProjectRef
 from spanport_server.services import log_export_service
+from spanport_server.services.log_export_format import safe_cell
 from spanport_server.services.log_export_service import LogExportService, PreparedExport
 
 pytestmark = pytest.mark.anyio
@@ -36,7 +43,8 @@ class Setup:
     def __init__(self, tenants: FakeTenantStore, project: ProjectRef) -> None:
         self.project = project
         self.logs = FakeLogSearchStore()
-        self.service = LogExportService(tenants, self.logs)
+        self.slots = ConcurrencyLimiter()
+        self.service = LogExportService(tenants, self.logs, self.slots)
 
     def caller(self, role: Role | None = Role.MEMBER) -> Caller:
         return Caller(org_id=self.project.org_id, label="user=test", role=role)
@@ -135,3 +143,32 @@ async def test_a_project_the_caller_cannot_see_is_not_found(setup: Setup) -> Non
 
     with pytest.raises(NotFoundError):
         await setup.service.prepare(limited, setup.request("csv"))
+
+
+@pytest.mark.parametrize(
+    "cell",
+    ["|cmd", "\n=1+1", "  =1+1", " @SUM(A1)", "-2", "\tx"],
+    ids=["pipe", "newline", "spaces-then-equals", "space-then-at", "minus", "tab"],
+)
+def test_risky_cells_get_a_leading_quote(cell: str) -> None:
+    assert safe_cell(cell) == "'" + cell
+
+
+@pytest.mark.parametrize("cell", ["Payment failed", "  plain text", "", "10.0.0.1"])
+def test_ordinary_cells_are_unchanged(cell: str) -> None:
+    assert safe_cell(cell) == cell
+
+
+async def test_one_export_at_a_time_per_caller_and_the_slot_comes_back(setup: Setup) -> None:
+    setup.logs.rows = [item("boom", 1)]
+    setup.logs.by_level = {"ERROR": 1}
+    running = await setup.service.prepare(setup.caller(), setup.request("csv"))
+
+    with pytest.raises(RateLimitedError, match="exports running"):
+        await setup.service.prepare(setup.caller(), setup.request("csv"))
+    other_person = Caller(org_id=setup.project.org_id, label="user=other", role=Role.MEMBER)
+    await setup.service.prepare(other_person, setup.request("csv"))
+    _ = [part async for part in setup.service.lines(running)]
+    again = await setup.service.prepare(setup.caller(), setup.request("csv"))
+
+    assert again.total == 1

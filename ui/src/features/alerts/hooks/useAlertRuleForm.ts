@@ -15,6 +15,8 @@ import {
   EMAIL_LIST_JOINER,
   MAX_ALERT_NAME_LENGTH,
   MAX_ALERT_THRESHOLD,
+  SINGLE_LINE_MESSAGE,
+  SINGLE_LINE_PATTERN,
 } from "../../../constants/alerts";
 import { EMAIL_PATTERN } from "../../../constants/auth";
 import { MAX_QUERY_LENGTH } from "../../../constants/logs";
@@ -27,8 +29,13 @@ function ruleFormSchema(limits: AlertLimits) {
   const windowProblem = windowMessage(limits.max_window_minutes);
   return zod
     .object({
-      name: zod.string().trim().min(1, ALERT_NAME_MESSAGE).max(MAX_ALERT_NAME_LENGTH),
-      query: zod.string().trim().max(MAX_QUERY_LENGTH),
+      name: zod
+        .string()
+        .trim()
+        .min(1, ALERT_NAME_MESSAGE)
+        .max(MAX_ALERT_NAME_LENGTH)
+        .regex(SINGLE_LINE_PATTERN, SINGLE_LINE_MESSAGE),
+      query: zod.string().trim().max(MAX_QUERY_LENGTH).regex(SINGLE_LINE_PATTERN, SINGLE_LINE_MESSAGE),
       threshold: zod
         .number(ALERT_THRESHOLD_MESSAGE)
         .int(ALERT_THRESHOLD_MESSAGE)

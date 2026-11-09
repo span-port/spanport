@@ -17,6 +17,11 @@ export const MAX_ALERT_THRESHOLD = 1_000_000;
 export const EMAIL_LIST_SEPARATOR = /[\s,;]+/;
 export const EMAIL_LIST_JOINER = ", ";
 
+// The name and search are one line each, as the server requires (the name is an email subject).
+// eslint-disable-next-line no-control-regex -- control characters are exactly what it refuses
+export const SINGLE_LINE_PATTERN = /^[^\x00-\x1f\x7f]*$/;
+export const SINGLE_LINE_MESSAGE = "Use one line, without tabs or other control characters.";
+
 export const ALERT_NAME_MESSAGE = "Give the alert a name.";
 export const ALERT_THRESHOLD_MESSAGE = `Enter a whole number from 0 to ${MAX_ALERT_THRESHOLD.toLocaleString("en")}.`;
 export const ALERT_EMAIL_INVALID_MESSAGE = "This isn't an email address:";

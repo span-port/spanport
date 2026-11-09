@@ -10,6 +10,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from spanport_server.core.constants import (
     DEFAULT_SEARCH_LIMIT,
     FIELD_NAME_PATTERN,
+    MAX_CURSOR_LENGTH,
     MAX_FILTER_CHIPS,
     MAX_FILTER_VALUE_LENGTH,
     MAX_QUERY_LENGTH,
@@ -53,7 +54,7 @@ class LogSearchRequest(LogFilterRequest):
     """A page of matching logs, newest first."""
 
     limit: int = Field(default=DEFAULT_SEARCH_LIMIT, ge=1, le=MAX_SEARCH_LIMIT)
-    cursor: str | None = None
+    cursor: str | None = Field(default=None, max_length=MAX_CURSOR_LENGTH)
 
 
 class ExportFormat(StrEnum):

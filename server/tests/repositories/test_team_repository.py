@@ -1,15 +1,18 @@
 """Team and invite repositories against a real Postgres (skipped without the dev databases)."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from spanport_server.repositories.postgres.api_key_repository import ApiKeyRepository
 from spanport_server.repositories.postgres.team_repository import TeamRepository
 from spanport_server.repositories.postgres.tenant_repository import TenantRepository
 from spanport_server.repositories.postgres.user_repository import UserRepository
+from spanport_server.schemas.api_key import KeyType, Scope
 from spanport_server.schemas.auth import Role, UserRecord
-from spanport_server.schemas.team import ProjectAccess, TeamChange
+from spanport_server.schemas.team import ProjectAccess, RevokedGrants, TeamChange
 
 pytestmark = pytest.mark.anyio
 
@@ -43,7 +46,7 @@ async def test_invite_accept_then_remove_and_invite_back(
 
     assert [invite.invited_by for invite in pending] == ["Owner"]
     assert used_again is None
-    assert await team.disable_user(owner.org_id, joined.id, NOW) is TeamChange.DONE
+    assert await team.disable_user(owner.org_id, joined.id, NOW, Role.MEMBER) is TeamChange.DONE
     assert await users.find_by_id(joined.id) is None
     await team.insert_invite(
         owner.org_id, "new@example.com", Role.VIEWER, ALL, "t2", owner.id, NOW, EXPIRES
@@ -84,25 +87,108 @@ async def test_the_last_owner_cannot_be_demoted_or_removed(
     owner = await make_owner(postgres_sessionmaker)
     team = TeamRepository(postgres_sessionmaker)
 
-    assert await team.change_role(owner.org_id, owner.id, Role.ADMIN) is TeamChange.LAST_OWNER
-    assert await team.disable_user(owner.org_id, owner.id, NOW) is TeamChange.LAST_OWNER
-    assert await team.change_role(owner.org_id, owner.id, Role.OWNER) is TeamChange.DONE
+    demote = await team.change_role(owner.org_id, owner.id, Role.ADMIN, Role.OWNER)
+    remove = await team.disable_user(owner.org_id, owner.id, NOW, Role.OWNER)
+    keep = await team.change_role(owner.org_id, owner.id, Role.OWNER, Role.OWNER)
+
+    assert (demote, remove, keep) == (TeamChange.LAST_OWNER, TeamChange.LAST_OWNER, TeamChange.DONE)
 
 
-async def test_login_failures_are_counted_per_email_and_forgotten(
+async def test_a_change_based_on_an_old_role_is_refused(
+    postgres_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    owner = await make_owner(postgres_sessionmaker)
+    team = TeamRepository(postgres_sessionmaker)
+    users = UserRepository(postgres_sessionmaker)
+    await team.insert_invite(
+        owner.org_id, "new@example.com", Role.ADMIN, ALL, "t1", owner.id, NOW, EXPIRES
+    )
+    admin = await users.accept_invite("t1", NOW, "New", "h")
+    assert admin is not None
+    assert await team.change_role(owner.org_id, admin.id, Role.OWNER, Role.ADMIN) is TeamChange.DONE
+
+    # Someone decided while the user was still an admin; they are an owner now.
+    stale_demote = await team.change_role(owner.org_id, admin.id, Role.VIEWER, Role.ADMIN)
+    stale_remove = await team.disable_user(owner.org_id, admin.id, NOW, Role.ADMIN)
+
+    assert (stale_demote, stale_remove) == (TeamChange.ROLE_CHANGED, TeamChange.ROLE_CHANGED)
+
+
+async def test_revoking_grants_cancels_invites_and_admin_keys_the_user_made(
+    postgres_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    owner = await make_owner(postgres_sessionmaker)
+    project = await TenantRepository(postgres_sessionmaker).get_or_create_project(
+        "acme", "northwind", "hr", "production"
+    )
+    team = TeamRepository(postgres_sessionmaker)
+    keys = ApiKeyRepository(postgres_sessionmaker)
+    await team.insert_invite(
+        owner.org_id, "new@example.com", Role.MEMBER, ALL, "t1", owner.id, NOW, EXPIRES
+    )
+    admin_key = await keys.insert_key(
+        owner.org_id,
+        None,
+        KeyType.ADMIN,
+        "admin-hash",
+        "a1b2",
+        (Scope.LOGS_READ,),
+        NOW + timedelta(days=30),
+        "script",
+        created_by=owner.id,
+    )
+    data_key = await keys.insert_key(
+        owner.org_id, project.project_id, KeyType.INGEST, "data-hash", "c3d4", created_by=owner.id
+    )
+    cli_key = await keys.insert_key(
+        owner.org_id,
+        None,
+        KeyType.ADMIN,
+        "cli-hash",
+        "e5f6",
+        (Scope.LOGS_READ,),
+        NOW + timedelta(days=30),
+    )
+
+    grants = await team.revoke_grants(owner.org_id, owner.id, NOW)
+
+    assert grants == RevokedGrants(invites_cancelled=1, keys_revoked=1)
+    assert admin_key.created_by == owner.id and cli_key.created_by is None
+    assert await team.list_open_invites(owner.org_id, NOW, None, 10) == []
+    revoked = {key.id: key.revoked_at for key in await keys.list_for_org(owner.org_id)}
+    assert revoked[admin_key.id] is not None
+    assert revoked[data_key.id] is None and revoked[cli_key.id] is None
+
+
+async def test_login_attempts_are_counted_per_email_and_forgotten(
+    postgres_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    users = UserRepository(postgres_sessionmaker)
+    window_start = NOW - timedelta(minutes=15)
+    old = NOW - timedelta(minutes=20)
+
+    await users.reserve_login_attempt("email-a", old, old - timedelta(minutes=15), 5)
+    await users.reserve_login_attempt("email-a", NOW, window_start, 5)
+    await users.reserve_login_attempt("email-b", NOW, window_start, 5)
+
+    assert await users.reserve_login_attempt("email-a", NOW, window_start, 5) == [NOW]
+    await users.clear_login_failures("email-a")
+    assert await users.reserve_login_attempt("email-a", NOW, window_start, 5) == []
+    assert len(await users.reserve_login_attempt("email-b", NOW, window_start, 5)) == 1
+
+
+async def test_parallel_login_attempts_cannot_pass_the_limit_together(
     postgres_sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     users = UserRepository(postgres_sessionmaker)
     window_start = NOW - timedelta(minutes=15)
 
-    await users.record_login_failure("email-a", NOW - timedelta(minutes=20), window_start)
-    await users.record_login_failure("email-a", NOW, window_start)
-    await users.record_login_failure("email-b", NOW, window_start)
+    seen = await asyncio.gather(
+        *(users.reserve_login_attempt("email-a", NOW, window_start, 5) for _ in range(12))
+    )
 
-    assert await users.recent_login_failures("email-a", window_start) == [NOW]
-    await users.clear_login_failures("email-a")
-    assert await users.recent_login_failures("email-a", window_start) == []
-    assert len(await users.recent_login_failures("email-b", window_start)) == 1
+    # Each attempt saw the ones stored before it, so only 5 got through.
+    assert sorted(len(failures) for failures in seen) == [0, 1, 2, 3, 4] + [5] * 7
 
 
 async def test_a_cancelled_invite_cannot_be_inspected(

@@ -69,7 +69,39 @@ PROBLEM_TYPE_DEFAULT = "about:blank"
 REQUEST_ID_HEADER = "X-Request-ID"
 GZIP_ENCODING = "gzip"
 MAX_INGEST_BODY_BYTES = 10 * 1024 * 1024
-MAX_INGEST_DECOMPRESSED_BYTES = 50 * 1024 * 1024
+MAX_INGEST_DECOMPRESSED_BYTES = 10 * 1024 * 1024
+# Most log records or spans in one request. The collector sends at most 1,000; a larger request
+# is refused before any row is built, so a tiny body of empty records can't make millions.
+MAX_INGEST_RECORDS = 5_000
+# Where records sit in the protobuf: request field 1 (resource_logs / resource_spans), then field
+# 2 (scope_logs / scope_spans), then field 2 (log_records / spans). The same for logs and traces.
+OTLP_RECORD_FIELD_PATH = (1, 2, 2)
+INVALID_OTLP_DETAIL = "The body is not a valid OTLP request."
+# Protobuf wire format: a field key is (field number << 3) | wire type; a varint carries 7 bits
+# per byte, the high bit saying another byte follows; fixed fields are 8 or 4 bytes.
+PROTOBUF_FIELD_NUMBER_SHIFT = 3
+PROTOBUF_WIRE_TYPE_MASK = 0b111
+VARINT_PAYLOAD_MASK = 0x7F
+VARINT_CONTINUE_BIT = 0x80
+VARINT_BITS_PER_BYTE = 7
+MAX_VARINT_SHIFT = 63
+PROTOBUF_FIXED64_BYTES = 8
+PROTOBUF_FIXED32_BYTES = 4
+TOO_MANY_RECORDS_DETAIL = "A request may hold at most {limit:,} records. Send smaller batches."
+# Rows per ClickHouse insert; a larger request is written in several inserts.
+CLICKHOUSE_INSERT_CHUNK_ROWS = 1_000
+STORAGE_REFUSED_DETAIL = "Storage refused a value in this batch. Check the records' fields."
+# Longest values kept from a record; longer ones are cut so one record can't fail a batch.
+MAX_LEVEL_TEXT_LENGTH = 32
+MAX_SERVICE_NAME_LENGTH = 200
+MAX_SPAN_NAME_LENGTH = 1_000
+MAX_ATTRIBUTE_KEY_LENGTH = 256
+MAX_URL_PATH_LENGTH = 2_048
+# The logs table stores severity_number as UInt8; HTTP status codes have three digits.
+MAX_SEVERITY_NUMBER = 255
+MAX_HTTP_STATUS_DIGITS = 3
+# A span longer than this is stored with this duration (a wrong clock, not a real request).
+MAX_SPAN_DURATION = timedelta(hours=24)
 SERVICE_NAME_ATTRIBUTE = "service.name"
 UNKNOWN_SERVICE_NAME = "unknown_service"
 NANOS_PER_SECOND = 1_000_000_000
@@ -134,6 +166,8 @@ MAX_TRACE_SEARCH_LIMIT = 500
 # A trace with more spans than this shows the first ones (by start time) and says it was cut.
 MAX_TRACE_SPANS = 2_000
 MAX_ROUTE_FILTER_LENGTH = 200
+# "Slower than" on the Requests screen: at most a day.
+MAX_MIN_DURATION_MS = 24 * 60 * 60 * 1000
 # trace_id is 32 hex characters, span_id 16 (W3C trace context).
 TRACE_ID_PATTERN = r"^[0-9a-f]{32}$"
 SPAN_ID_PATTERN = r"^[0-9a-f]{16}$"
@@ -218,7 +252,20 @@ AUTH_ME_PATH = "/api/v1/auth/me"
 SETUP_TOKEN_LIFETIME = timedelta(hours=1)
 # Signed-in users are signed out after this long without a request.
 SESSION_IDLE_TIMEOUT = timedelta(hours=8)
+# However active, a session ends this long after sign-in (SPANPORT_SESSION_MAX_HOURS).
+DEFAULT_SESSION_MAX_HOURS = 168
+MAX_SESSION_MAX_HOURS = 30 * 24
 SESSION_TOKEN_BYTES = 32
+# Argon2 runs in its own threads, at most this many at once, so a flood of sign-ins can neither
+# block the event loop nor take every core.
+PASSWORD_HASH_THREADS = 4
+HASHING_THREAD_PREFIX = "password-hash"
+# Postgres advisory lock keys. Setup takes one lock for the whole server; sign-in takes one
+# per email, as (namespace, hashtext(email hash)).
+SETUP_ADVISORY_LOCK = 7301
+LOGIN_ADVISORY_LOCK_NAMESPACE = 7302
+# Postgres's name for the unique constraint on users.email (migration 0003).
+USERS_EMAIL_UNIQUE = "users_email_key"
 # __Host- makes browsers require Secure, Path=/ and no Domain, so subdomains can't overwrite them.
 SESSION_COOKIE = "__Host-sp_session"
 CSRF_COOKIE = "__Host-sp_csrf"
@@ -237,7 +284,14 @@ MAX_NAME_LENGTH = 200
 MAX_EMAIL_LENGTH = 254
 MAX_ORG_NAME_LENGTH = 63
 MAX_AUTH_BODY_BYTES = 8 * 1024
-EMAIL_PATTERN = r"^[^\s@]+@[^\s@]+\.[^\s@]+$"
+# One plain address: no separators, quotes, brackets or control characters, so a value like
+# "a@x.com,b@y.com" or "Name <a@x.com>" can never turn into several recipients.
+EMAIL_PATTERN = (
+    r'^[^\s@,;:<>()\[\]"\\\x00-\x1f\x7f]+@[^\s@,;:<>()\[\]"\\\x00-\x1f\x7f]+'
+    r'\.[^\s@,;:<>()\[\]"\\\x00-\x1f\x7f]+$'
+)
+# Rule names and other one-line text: no control characters (CR/LF would break email headers).
+SINGLE_LINE_PATTERN = r"^[^\x00-\x1f\x7f]*$"
 # An organization name becomes its slug: lower case, every other run of characters one "-".
 SLUG_SEPARATOR_PATTERN = r"[^a-z0-9]+"
 SLUG_SEPARATOR = "-"
@@ -280,6 +334,9 @@ INVALID_INVITE_DETAIL = (
     "This invite link is wrong, already used, cancelled or expired. Ask for a new one."
 )
 ACCOUNT_EXISTS_DETAIL = "This email already has a Spanport account."
+# For an email with an account in another organization: says nothing about that account.
+NOT_INVITABLE_DETAIL = "This email can't be invited."
+ROLE_CHANGED_DETAIL = "This user's role changed meanwhile. Reload the page and try again."
 LAST_OWNER_DETAIL = "The organization needs an owner. Make someone else an owner first."
 OWNER_ONLY_DETAIL = "Only owners can make someone an owner or change an owner."
 SELF_CHANGE_DETAIL = (
@@ -315,8 +372,10 @@ CSV_CONTENT_TYPE = "text/csv; charset=utf-8"
 NDJSON_CONTENT_TYPE = "application/x-ndjson"
 CONTENT_DISPOSITION_HEADER = "Content-Disposition"
 CSV_COLUMNS = ("ts", "level", "service", "message", "trace_id", "span_id", "client_ip", "user_id")
-# Spreadsheets run a cell starting with these as a formula; such cells get a leading quote.
-CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+# Spreadsheets run a cell starting with these as a formula (also after leading spaces); such
+# cells get a leading quote.
+CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "|", "\t", "\r", "\n")
+CSV_LEADING_SPACE = " "
 CSV_FORMULA_GUARD = "'"
 VIEWER_EXPORT_DETAIL = "Viewers can't export logs. Ask an owner, admin or member."
 TOO_MANY_TO_EXPORT_DETAIL = (
@@ -356,6 +415,13 @@ LOG_COLUMN_FIELDS = ("level", "service", "message", "trace_id", "span_id")
 LOG_FIELD_ALIASES = {"ip": "client.ip", "user": "user.id", "trace": "trace_id", "span": "span_id"}
 STORAGE_UNAVAILABLE_DETAIL = "Log storage is unavailable. Retry later."
 INVALID_CURSOR_DETAIL = "The cursor is not valid. Start again without it."
+# Real cursors are about 110 characters; anything far longer was made up.
+MAX_CURSOR_LENGTH = 256
+# A range may end a little ahead (logs can be stamped up to MAX_FUTURE_LOG_SKEW ahead), never
+# arbitrarily far in the future.
+MAX_RANGE_END_SKEW = timedelta(hours=1)
+RANGE_END_DETAIL = "end: must be at most 1 hour from now."
+RANGE_OUT_OF_BOUNDS_DETAIL = "start, end: the date is out of range."
 # Keys inside the opaque paging cursor (base64url JSON).
 CURSOR_TIME_KEY = "ts"
 CURSOR_ID_KEY = "log_id"
@@ -476,3 +542,106 @@ ALERT_RULES_LIMIT_DETAIL = "This project already has {limit} alert rules, the mo
 # ClickHouse: reply only after the rows are written to disk.
 LOGS_TABLE = "logs"
 CLICKHOUSE_INSERT_SETTINGS = {"async_insert": 1, "wait_for_async_insert": 1}
+# Reads are limited per query (SPANPORT_CLICKHOUSE_MAX_EXECUTION_SECONDS / _MAX_MEMORY_BYTES, set
+# on the client); writes lift those limits (0 means none), since their size is already bounded.
+CLICKHOUSE_MAX_EXECUTION_SETTING = "max_execution_time"
+CLICKHOUSE_MAX_MEMORY_SETTING = "max_memory_usage"
+CLICKHOUSE_WRITE_SETTINGS = {CLICKHOUSE_MAX_EXECUTION_SETTING: 0, CLICKHOUSE_MAX_MEMORY_SETTING: 0}
+DEFAULT_CLICKHOUSE_MAX_EXECUTION_SECONDS = 30
+MAX_CLICKHOUSE_MAX_EXECUTION_SECONDS = 3_600
+DEFAULT_CLICKHOUSE_MAX_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
+MIN_CLICKHOUSE_MAX_MEMORY_BYTES = 64 * 1024 * 1024
+# ClickHouse error codes for a query stopped by those limits: TIMEOUT_EXCEEDED, TOO_SLOW
+# (expected to run past the time limit) and MEMORY_LIMIT_EXCEEDED.
+CLICKHOUSE_LIMIT_ERROR_CODES = frozenset({159, 160, 241})
+QUERY_TOO_EXPENSIVE_DETAIL = (
+    "This query needs more time or memory than the server allows. "
+    "Narrow the time range or add filters."
+)
+# The password .env.example ships with; the server refuses to start with it.
+PLACEHOLDER_PASSWORD = "change-me"  # noqa: S105 - the known placeholder, refused at start-up
+ENV_EXAMPLE_PLACEHOLDER_DETAIL = "replace the placeholder password from .env.example"
+# Data and admin keys are their prefix plus secrets.token_urlsafe(API_KEY_RANDOM_BYTES): 43
+# characters of A-Z, a-z, 0-9, "_" and "-". Anything else is refused without a database lookup.
+API_KEY_BODY_PATTERN = r"^[A-Za-z0-9_-]{43}$"
+
+# API docs (/docs, /redoc, /openapi.json) are served only with SPANPORT_API_DOCS=true.
+API_DOCS_PATH = "/docs"
+API_REDOC_PATH = "/redoc"
+OPENAPI_PATH = "/openapi.json"
+
+# Rate limits on /api/v1 (in-process token buckets; health and OTLP ingest are never limited).
+# Signed-in people and admin keys are limited per caller; routes open without signing in are
+# limited per client address. Defaults and allowed ranges of the SPANPORT_RATE_LIMIT_* settings.
+API_PATH_PREFIX = "/api/v1/"
+AUTHORIZATION_HEADER = "Authorization"
+RATE_LIMIT_WINDOW_SECONDS = 60
+SECONDS_PER_HOUR = 60 * 60
+SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR
+DEFAULT_RATE_LIMIT_PER_MINUTE = 300
+DEFAULT_RATE_LIMIT_EXPENSIVE_PER_MINUTE = 120
+DEFAULT_RATE_LIMIT_PUBLIC_PER_MINUTE = 20
+MAX_RATE_LIMIT_PER_MINUTE = 100_000
+# A limiter remembers at most this many callers; the least recently seen is forgotten first.
+RATE_LIMIT_MAX_BUCKETS = 100_000
+# Routes that run large ClickHouse queries share a lower limit per caller.
+EXPENSIVE_PATHS = frozenset(
+    {
+        LOG_SEARCH_PATH,
+        LOG_COUNTS_PATH,
+        LOG_EXPORT_PATH,
+        ENDPOINT_SUMMARY_PATH,
+        ENDPOINT_DETAIL_PATH,
+        ERROR_SUMMARY_PATH,
+        ERROR_WINDOW_PATH,
+        SERVICE_MAP_PATH,
+        TRACE_SEARCH_PATH,
+    }
+)
+# Open without signing in, so limited per client address.
+PUBLIC_PATHS = frozenset(
+    {AUTH_SETUP_PATH, AUTH_LOGIN_PATH, INSPECT_INVITE_PATH, ACCEPT_INVITE_PATH}
+)
+# nginx (the UI container) sends the browser's address in this header.
+REAL_IP_HEADER = "X-Real-IP"
+UNKNOWN_CLIENT_ADDRESS = "unknown"
+# Limiter keys: who is counted, and for what.
+USER_RATE_KEY = "user:{user_id}"
+API_KEY_RATE_KEY = "key:{key_id}"
+ADDRESS_RATE_KEY = "address:{address}"
+EXPENSIVE_RATE_KEY = "expensive:{caller}"
+ALERT_TEST_RULE_RATE_KEY = "alert-test-rule:{rule_id}"
+ALERT_TEST_USER_RATE_KEY = "alert-test-user:{user_id}"
+ALERT_EMAIL_ORG_RATE_KEY = "alert-email:{org_id}"
+TAIL_SLOT_KEY = "tail:{org_id}:{caller}"
+EXPORT_SLOT_KEY = "export:{org_id}:{caller}"
+RATE_LIMITED_DETAIL = "Too many requests. Try again in {seconds} s."
+# Testing an alert rule sends real email: once a minute per rule, and a daily cap per person.
+ALERT_TEST_RULE_INTERVAL_SECONDS = 60
+DEFAULT_ALERT_TESTS_PER_DAY = 20
+MAX_ALERT_TESTS_PER_DAY = 10_000
+ALERT_TEST_RULE_DETAIL = "This rule was tested less than a minute ago. Try again in {seconds} s."
+ALERT_TESTS_PER_DAY_DETAIL = "You sent {limit} test emails in the last day, the most allowed."
+# Alert emails per organization per hour (SPANPORT_ALERT_MAX_EMAILS_PER_HOUR); over it, emails
+# are skipped and the alert itself is still recorded.
+DEFAULT_ALERT_MAX_EMAILS_PER_HOUR = 100
+MAX_ALERT_EMAILS_PER_HOUR = 100_000
+ALERT_EMAIL_CAP_DETAIL = (
+    "This organization sent {limit} alert emails in the last hour, the most allowed. "
+    "The email was not sent."
+)
+# Live tail: the caller's access is checked again this often; a stream lasts at most
+# SPANPORT_TAIL_MAX_MINUTES (the UI reconnects); a caller runs at most a few at once.
+TAIL_RECHECK_SECONDS = 60
+DEFAULT_TAIL_MAX_MINUTES = 60
+MAX_TAIL_MAX_MINUTES = 24 * 60
+DEFAULT_MAX_TAILS_PER_CALLER = 3
+DEFAULT_MAX_EXPORTS_PER_CALLER = 1
+MAX_STREAMS_PER_CALLER = 100
+# A slot whose stream was torn down without cleanup frees itself after its longest run plus this.
+STREAM_SLOT_MARGIN_SECONDS = 60
+# An export that has not finished in this time no longer holds its slot.
+EXPORT_SLOT_SECONDS = 15 * 60
+STREAM_SLOT_RETRY_SECONDS = 15
+TOO_MANY_TAILS_DETAIL = "You have {limit} live tails open, the most allowed. Close one first."
+TOO_MANY_EXPORTS_DETAIL = "You have {limit} exports running, the most allowed. Wait for one."

@@ -55,11 +55,11 @@ export interface AlertEvent {
   resolution_note: string | null;
 }
 
-/** Someone a project's alerts can be assigned to. */
+/** Someone a project's alerts can be assigned to. `email` is null unless you are an owner or admin. */
 export interface Assignee {
   id: string;
   name: string;
-  email: string;
+  email: string | null;
 }
 
 /** This server's alert settings (SPANPORT_ALERT_*): how often rules are checked and their limits. */

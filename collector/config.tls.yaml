@@ -1,0 +1,18 @@
+# Optional TLS for apps that send from other machines. Off by default.
+# The collector merges config files given in order, so this adds TLS to the receivers of
+# config.yaml and changes nothing else. To use it, mount a certificate and its key at
+# /etc/otelcol-contrib/tls/ and start the collector with both files:
+#   --config=/etc/otelcol-contrib/config.yaml --config=/etc/otelcol-contrib/config.tls.yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        tls:
+          cert_file: /etc/otelcol-contrib/tls/cert.pem
+          key_file: /etc/otelcol-contrib/tls/key.pem
+          min_version: "1.2"
+      http:
+        tls:
+          cert_file: /etc/otelcol-contrib/tls/cert.pem
+          key_file: /etc/otelcol-contrib/tls/key.pem
+          min_version: "1.2"

@@ -20,6 +20,7 @@ from spanport_server.core.constants import (
     MAX_EMAIL_LENGTH,
     MAX_QUERY_LENGTH,
     MAX_RESOLUTION_NOTE_LENGTH,
+    SINGLE_LINE_PATTERN,
 )
 from spanport_server.core.ids import UuidV7
 
@@ -34,13 +35,22 @@ class AlertState(StrEnum):
     RESOLVED = "resolved"
 
 
+class AssignOutcome(StrEnum):
+    """What assigning an alert did: changed who has it, nothing (same person), or found no
+    open alert."""
+
+    ASSIGNED = "assigned"
+    UNCHANGED = "unchanged"
+    NOT_FOUND = "not_found"
+
+
 class AlertRuleFields(BaseModel):
     """What a rule watches and who it emails. `query` uses the Logs search syntax."""
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=1, max_length=MAX_ALERT_NAME_LENGTH)
-    query: str = Field(default="", max_length=MAX_QUERY_LENGTH)
+    name: str = Field(min_length=1, max_length=MAX_ALERT_NAME_LENGTH, pattern=SINGLE_LINE_PATTERN)
+    query: str = Field(default="", max_length=MAX_QUERY_LENGTH, pattern=SINGLE_LINE_PATTERN)
     threshold: int = Field(ge=0, le=MAX_ALERT_THRESHOLD)
     # The ceilings only bound the body; the server's own limits (AlertLimits) are checked after.
     window_minutes: int = Field(ge=1, le=ALERT_WINDOW_CEILING_MINUTES)
@@ -171,10 +181,20 @@ class AssigneeItem(BaseModel):
     email: str
 
 
+class AssigneeView(BaseModel):
+    """Someone an alert can be assigned to, as listed. `email` is shown to owners and admins
+    only; everyone else gets None.
+    """
+
+    id: UuidV7
+    name: str
+    email: str | None
+
+
 class AssigneeListResponse(BaseModel):
     """Everyone a project's alerts can be assigned to, by name. One page holds them all."""
 
-    data: list[AssigneeItem]
+    data: list[AssigneeView]
     next_cursor: None = None
     has_more: bool = False
 

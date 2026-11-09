@@ -134,8 +134,28 @@ class DeliveryError(SpanportError):
     code = "delivery_failed"
 
 
+class EmailCapError(DeliveryError, RateLimitedError):
+    """The organization sent its most alert emails for the hour; this one was not sent.
+
+    Both kinds on purpose: as a DeliveryError, the alert check and assignment code log it and
+    keep the alert as recorded; as a RateLimitedError, a person's own request (a rule's test
+    email) gets 429 with Retry-After.
+    """
+
+    status = HTTPStatus.TOO_MANY_REQUESTS
+    code = "rate_limited"
+
+
 class StorageUnavailableError(SpanportError):
     """A database is unreachable. Clients should retry later."""
 
     status = HTTPStatus.SERVICE_UNAVAILABLE
     code = "storage_unavailable"
+
+
+class QueryTooExpensiveError(SpanportError):
+    """A read query was stopped by the ClickHouse time or memory limit. Retrying the same query
+    won't help; the caller should narrow it."""
+
+    status = HTTPStatus.BAD_REQUEST
+    code = "query_too_expensive"

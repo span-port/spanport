@@ -2,6 +2,8 @@
 
 Rules: only owners grant or change the owner role, nobody changes or removes themselves, and an
 organization always keeps an active owner. An invite gives nobody access until it is accepted.
+Removing someone, or demoting an owner or admin to member or viewer, cancels the invites they
+sent and revokes the admin keys they created.
 """
 
 import logging
@@ -18,9 +20,11 @@ from spanport_server.core.constants import (
     LAST_OWNER_DETAIL,
     NO_INVITE_DETAIL,
     NO_USER_DETAIL,
+    NOT_INVITABLE_DETAIL,
     NOT_SIGNED_IN_DETAIL,
     OWNER_ONLY_DETAIL,
     PICK_PROJECTS_DETAIL,
+    ROLE_CHANGED_DETAIL,
     SELF_CHANGE_DETAIL,
     SESSION_TOKEN_BYTES,
     UNKNOWN_PROJECTS_DETAIL,
@@ -42,6 +46,7 @@ from spanport_server.schemas.team import (
     InviteListResponse,
     InviteRequest,
     ProjectAccess,
+    RevokedGrants,
     TeamChange,
     UserItem,
     UserListResponse,
@@ -61,9 +66,17 @@ class TeamStore(Protocol):
 
     async def find_user(self, org_id: UuidV7, user_id: UuidV7) -> UserItem | None: ...
 
-    async def change_role(self, org_id: UuidV7, user_id: UuidV7, role: Role) -> TeamChange: ...
+    async def change_role(
+        self, org_id: UuidV7, user_id: UuidV7, role: Role, expected_role: Role
+    ) -> TeamChange: ...
 
-    async def disable_user(self, org_id: UuidV7, user_id: UuidV7, now: datetime) -> TeamChange: ...
+    async def disable_user(
+        self, org_id: UuidV7, user_id: UuidV7, now: datetime, expected_role: Role
+    ) -> TeamChange: ...
+
+    async def revoke_grants(
+        self, org_id: UuidV7, user_id: UuidV7, now: datetime
+    ) -> RevokedGrants: ...
 
     async def find_account(self, email: str) -> AccountOwner | None: ...
 
@@ -133,20 +146,34 @@ class TeamService:
     async def change_role(self, caller: Caller, user_id: UuidV7, role: Role) -> UserItem:
         """Give a user a new role.
 
+        Demoting an owner or admin to member or viewer also cancels the invites they sent and
+        revokes the admin keys they created.
+
         Raises:
             NotFoundError: No such active user in the caller's organization.
             NotAllowedError: Changing oneself, or an admin touching the owner role.
-            ConflictError: It would leave the organization without an owner.
+            ConflictError: It would leave the organization without an owner, or the user's role
+                changed meanwhile.
         """
         target = await self._changeable(caller, user_id)
         if Role.OWNER in (role, target.role) and caller.role is not Role.OWNER:
             raise NotAllowedError(OWNER_ONLY_DETAIL)
-        self._raise_for(await self._team.change_role(caller.org_id, user_id, role))
+        # The store re-checks target.role under lock, so a concurrent change can't slip past.
+        self._raise_for(await self._team.change_role(caller.org_id, user_id, role, target.role))
         if role in FULL_ACCESS_ROLES:
             # Owners and admins see every project; a later demotion keeps that until changed.
             await self._team.set_project_access(caller.org_id, user_id, True, [])
+        grants = RevokedGrants(invites_cancelled=0, keys_revoked=0)
+        if target.role in FULL_ACCESS_ROLES and role not in FULL_ACCESS_ROLES:
+            grants = await self._team.revoke_grants(caller.org_id, user_id, self._now())
         logger.info(
-            "user role changed %s user=%s from=%s to=%s", caller.label, user_id, target.role, role
+            "user role changed %s user=%s from=%s to=%s invites_cancelled=%d keys_revoked=%d",
+            caller.label,
+            user_id,
+            target.role,
+            role,
+            grants.invites_cancelled,
+            grants.keys_revoked,
         )
         return await self._changeable(caller, user_id)
 
@@ -177,7 +204,8 @@ class TeamService:
         return await self._changeable(caller, user_id)
 
     async def remove_user(self, caller: Caller, user_id: UuidV7) -> None:
-        """Remove a user: they can't sign in again and are signed out everywhere now.
+        """Remove a user: they can't sign in again and are signed out everywhere now; the
+        invites they sent are cancelled and the admin keys they created revoked.
 
         Raises:
             NotFoundError, NotAllowedError, ConflictError: As for change_role.
@@ -186,9 +214,17 @@ class TeamService:
         if target.role is Role.OWNER and caller.role is not Role.OWNER:
             raise NotAllowedError(OWNER_ONLY_DETAIL)
         now = self._now()
-        self._raise_for(await self._team.disable_user(caller.org_id, user_id, now))
+        self._raise_for(await self._team.disable_user(caller.org_id, user_id, now, target.role))
         revoked = await self._sessions.revoke_for_user(user_id, now)
-        logger.info("user removed %s user=%s sessions_revoked=%d", caller.label, user_id, revoked)
+        grants = await self._team.revoke_grants(caller.org_id, user_id, now)
+        logger.info(
+            "user removed %s user=%s sessions_revoked=%d invites_cancelled=%d keys_revoked=%d",
+            caller.label,
+            user_id,
+            revoked,
+            grants.invites_cancelled,
+            grants.keys_revoked,
+        )
 
     async def create_invite(self, caller: Caller, request: InviteRequest) -> CreatedInviteResponse:
         """Invite someone. Nothing is granted until they open the link and accept it.
@@ -200,7 +236,8 @@ class TeamService:
 
         Raises:
             NotAllowedError: An admin inviting an owner.
-            ConflictError: The email already has an account.
+            ConflictError: The email has an account in this organization, or can't be invited
+                (an account elsewhere, which the message doesn't confirm).
             InvalidRequestError: No project picked, or a project isn't in the organization.
         """
         if request.role is Role.OWNER and caller.role is not Role.OWNER:
@@ -213,10 +250,7 @@ class TeamService:
         )
         await self._check_access(caller, access)
         email = normalize_email(request.email)
-        account = await self._team.find_account(email)
-        # A removed user of this organization may come back; any other account can't.
-        if account is not None and not (account.disabled and account.org_id == caller.org_id):
-            raise ConflictError(ACCOUNT_EXISTS_DETAIL)
+        await self._check_invitable(caller, email)
         token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
         now = self._now()
         invite = await self._team.insert_invite(
@@ -259,6 +293,21 @@ class TeamService:
             raise NotFoundError(NO_INVITE_DETAIL)
         logger.info("invite cancelled %s invite=%s", caller.label, invite_id)
 
+    async def _check_invitable(self, caller: Caller, email: str) -> None:
+        """Refuse an email that already has an account, except a removed user of this org.
+
+        An account in another organization gets a message that doesn't say an account exists,
+        so inviting can't be used to find out who uses Spanport elsewhere.
+        """
+        account = await self._team.find_account(email)
+        if account is None:
+            return
+        if account.org_id != caller.org_id:
+            logger.info("invite refused %s reason=account_elsewhere", caller.label)
+            raise ConflictError(NOT_INVITABLE_DETAIL)
+        if not account.disabled:
+            raise ConflictError(ACCOUNT_EXISTS_DETAIL)
+
     async def _changeable(self, caller: Caller, user_id: UuidV7) -> UserItem:
         """The target user, if the caller may change them at all."""
         if user_id == caller.user_id:
@@ -291,5 +340,7 @@ class TeamService:
                 raise NotFoundError(NO_USER_DETAIL)
             case TeamChange.LAST_OWNER:
                 raise ConflictError(LAST_OWNER_DETAIL)
+            case TeamChange.ROLE_CHANGED:
+                raise ConflictError(ROLE_CHANGED_DETAIL)
             case TeamChange.DONE:
                 return

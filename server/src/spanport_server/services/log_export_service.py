@@ -1,7 +1,8 @@
 """Exports the current log search as a CSV or NDJSON file, streamed in batches.
 
-Same rules as search (own org, visible projects, last 7 days), plus: viewers can't export, and a
-file holds at most MAX_EXPORT_LINES (larger exports, emailed as a link, come later).
+Same rules as search (own org, visible projects, last 7 days), plus: viewers can't export, a
+file holds at most MAX_EXPORT_LINES (larger exports, emailed as a link, come later), and a caller
+runs at most SPANPORT_RATE_LIMIT_CONCURRENT_EXPORTS exports at once.
 """
 
 import logging
@@ -13,17 +14,28 @@ from typing import Protocol
 
 from spanport_server.core.constants import (
     CSV_CONTENT_TYPE,
+    DEFAULT_MAX_EXPORTS_PER_CALLER,
     EXPORT_BATCH_SIZE,
     EXPORT_FILE_PREFIX,
+    EXPORT_SLOT_KEY,
+    EXPORT_SLOT_SECONDS,
     EXPORT_TIME_FORMAT,
     MAX_EXPORT_LINES,
     NDJSON_CONTENT_TYPE,
     NO_PROJECT_DETAIL,
+    STREAM_SLOT_RETRY_SECONDS,
+    TOO_MANY_EXPORTS_DETAIL,
     TOO_MANY_TO_EXPORT_DETAIL,
     VIEWER_EXPORT_DETAIL,
 )
-from spanport_server.core.errors import InvalidRequestError, NotAllowedError, NotFoundError
+from spanport_server.core.errors import (
+    InvalidRequestError,
+    NotAllowedError,
+    NotFoundError,
+    RateLimitedError,
+)
 from spanport_server.core.ids import UuidV7
+from spanport_server.core.rate_limiter import ConcurrencyLimiter, Lease
 from spanport_server.schemas.auth import Caller, Role
 from spanport_server.schemas.log_search import (
     ExportFormat,
@@ -52,7 +64,7 @@ class ExportProjects(Protocol):
 
 @dataclass(frozen=True)
 class PreparedExport:
-    """A checked export, ready to stream."""
+    """A checked export, ready to stream, holding one of its caller's export slots."""
 
     query: LogQuery
     export_format: ExportFormat
@@ -60,6 +72,7 @@ class PreparedExport:
     content_type: str
     total: int
     caller_label: str
+    lease: Lease
 
 
 def content_type_of(export_format: ExportFormat) -> str:
@@ -81,15 +94,25 @@ def export_file_name(project: ProjectItem, export_format: ExportFormat, at: date
 class LogExportService:
     """Checks an export, then streams its rows newest first."""
 
-    def __init__(self, projects: ExportProjects, logs: LogSearchStore) -> None:
+    def __init__(
+        self,
+        projects: ExportProjects,
+        logs: LogSearchStore,
+        slots: ConcurrencyLimiter,
+        max_exports: int = DEFAULT_MAX_EXPORTS_PER_CALLER,
+    ) -> None:
         """Create the service.
 
         Args:
             projects: Project checks and names (Postgres).
             logs: Stored logs (ClickHouse).
+            slots: Exports running per caller, shared by the whole app.
+            max_exports: Exports one caller may run at once.
         """
         self._projects = projects
         self._logs = logs
+        self._slots = slots
+        self._max_exports = max_exports
 
     async def prepare(self, caller: Caller, request: LogExportRequest) -> PreparedExport:
         """Check everything before the first byte is sent, so errors are normal responses.
@@ -99,6 +122,7 @@ class LogExportService:
             NotFoundError: The project isn't in the caller's organization or not visible to them.
             InvalidRequestError: Bad range or query, or more than MAX_EXPORT_LINES match.
             StorageUnavailableError: ClickHouse is down.
+            RateLimitedError: The caller already runs the most exports allowed.
         """
         if caller.role is Role.VIEWER:
             raise NotAllowedError(VIEWER_EXPORT_DETAIL)
@@ -118,10 +142,38 @@ class LogExportService:
             content_type=content_type_of(request.format),
             total=total,
             caller_label=caller.label,
+            lease=self._take_slot(caller),
         )
 
+    def _take_slot(self, caller: Caller) -> Lease:
+        """One of the caller's export slots, taken last so a refused export holds none.
+
+        Raises:
+            RateLimitedError: Every slot is taken.
+        """
+        slot_key = EXPORT_SLOT_KEY.format(org_id=caller.org_id, caller=caller.label)
+        lease = self._slots.acquire(slot_key, self._max_exports, EXPORT_SLOT_SECONDS)
+        if lease is None:
+            logger.warning(
+                "log export refused: too many running %s limit=%d", caller.label, self._max_exports
+            )
+            raise RateLimitedError(
+                TOO_MANY_EXPORTS_DETAIL.format(limit=self._max_exports), STREAM_SLOT_RETRY_SECONDS
+            )
+        return lease
+
     async def lines(self, export: PreparedExport) -> AsyncIterator[str]:
-        """The file, a batch of rows at a time, newest first; logs one line when done."""
+        """The file, a batch of rows at a time, newest first; logs one line when done. The
+        export's slot is given back however the stream ends.
+        """
+        try:
+            async for chunk in self._chunks(export):
+                yield chunk
+        finally:
+            self._slots.release(export.lease)
+
+    async def _chunks(self, export: PreparedExport) -> AsyncIterator[str]:
+        """The header, then the rows in batches."""
         started = time.perf_counter()
         yield file_header(export.export_format)
         written = 0

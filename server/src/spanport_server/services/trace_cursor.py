@@ -1,7 +1,6 @@
 """The opaque paging cursor for the Requests list: where the last page ended, as base64url JSON."""
 
 import base64
-import binascii
 import json
 import re
 from datetime import datetime
@@ -14,6 +13,7 @@ from spanport_server.core.constants import (
 )
 from spanport_server.core.errors import InvalidRequestError
 from spanport_server.schemas.trace import SpanPosition
+from spanport_server.services.log_cursor import cursor_payload, cursor_text, cursor_time
 
 
 def encode_trace_cursor(position: SpanPosition) -> str:
@@ -22,18 +22,15 @@ def encode_trace_cursor(position: SpanPosition) -> str:
     return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
 
 
-def decode_trace_cursor(cursor: str) -> SpanPosition:
-    """Decode a cursor from a previous response.
+def decode_trace_cursor(cursor: str, start: datetime, end: datetime) -> SpanPosition:
+    """Decode a cursor from a previous response of a search over [start, end].
 
     Raises:
-        InvalidRequestError: The cursor was changed, cut short or made up.
+        InvalidRequestError: The cursor was changed, cut short, made up or belongs to another
+            time range.
     """
-    try:
-        payload = json.loads(base64.urlsafe_b64decode(cursor.encode()))
-        ts = datetime.fromisoformat(payload[CURSOR_TIME_KEY])
-        span_id = str(payload[CURSOR_SPAN_KEY])
-    except (binascii.Error, ValueError, KeyError, TypeError) as error:
-        raise InvalidRequestError(INVALID_CURSOR_DETAIL) from error
-    if ts.tzinfo is None or not re.fullmatch(SPAN_ID_PATTERN, span_id):
+    payload = cursor_payload(cursor)
+    span_id = cursor_text(payload, CURSOR_SPAN_KEY)
+    if not re.fullmatch(SPAN_ID_PATTERN, span_id):
         raise InvalidRequestError(INVALID_CURSOR_DETAIL)
-    return SpanPosition(ts=ts, span_id=span_id)
+    return SpanPosition(ts=cursor_time(payload, start, end), span_id=span_id)

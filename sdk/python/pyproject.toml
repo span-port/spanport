@@ -1,6 +1,6 @@
 [project]
 name = "spanport"
-version = "1.0.0"
+version = "1.0.1"
 description = "Send your Python app's logs and request traces to Spanport with two lines of code."
 readme = "README.md"
 license = "Apache-2.0"
@@ -42,8 +42,8 @@ all = ["spanport[fastapi,flask,django,sqlalchemy,psycopg,httpx,requests]"]
 [project.urls]
 Homepage = "https://github.com/span-port/spanport"
 # The exact source of this release.
-Source = "https://github.com/span-port/spanport/tree/sdk-python-v1.0.0/sdk/python"
-Release = "https://github.com/span-port/spanport/releases/tag/sdk-python-v1.0.0"
+Source = "https://github.com/span-port/spanport/tree/sdk-python-v1.0.1/sdk/python"
+Release = "https://github.com/span-port/spanport/releases/tag/sdk-python-v1.0.1"
 Issues = "https://github.com/span-port/spanport/issues"
 
 [dependency-groups]

@@ -32,7 +32,7 @@ from spanport_server.services.project_service import ProjectService
 
 pytestmark = pytest.mark.anyio
 
-LOGS_ONLY_KEY = "sp_admin_logs-only-key-000000000000000000000k9l0"
+LOGS_ONLY_KEY = "sp_admin_logs-only-key-0000000000000000000000000k9l0"
 
 
 class Setup:
@@ -60,7 +60,7 @@ async def setup() -> AsyncIterator[Setup]:
     )
     app.dependency_overrides[get_project_service] = lambda: ProjectService(tenants, FakeLogWriter())
     app.dependency_overrides[get_log_tail_service] = lambda: LogTailService(
-        tenants, FakeLogSearchStore()
+        tenants, FakeLogSearchStore(), app.state.stream_slots
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

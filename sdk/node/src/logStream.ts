@@ -17,12 +17,14 @@ import {
 import {
   LEVEL_FIELD,
   LINE_SEPARATOR,
+  MAX_PARTIAL_LINE_LENGTH,
   MESSAGE_FIELDS,
   SPAN_ID_FIELD,
   TIME_FIELDS,
   TRACE_ID_FIELD,
 } from "./constants.js";
 import { type LogEntry } from "./pipeline.js";
+import { sdkWarning } from "./sdkMessages.js";
 import { INFO, type Severity, pinoSeverity, winstonSeverity } from "./severity.js";
 
 type JsonFields = Record<string, unknown>;
@@ -39,7 +41,10 @@ const RECORD_FIELDS = new Set([
 /**
  * Create a stream that turns each line written to it into a log entry.
  *
- * Lines split across writes are joined before parsing.
+ * Lines split across writes are joined before parsing. An unfinished line longer than
+ * MAX_PARTIAL_LINE_LENGTH is sent as it is (cut to that length), so a writer that never ends its
+ * lines can't grow memory without bound. An error while handling a line is reported on stderr
+ * and never reaches the app's logger.
  *
  * @param onEntry - Receives each parsed entry.
  * @returns The stream to give to pino or winston.
@@ -50,12 +55,26 @@ export function createLogStream(onEntry: (entry: LogEntry) => void): Writable {
     write(chunk: Buffer | string, _encoding, done): void {
       const lines = (partialLine + chunk.toString()).split(LINE_SEPARATOR);
       partialLine = lines.pop() ?? "";
+      if (partialLine.length > MAX_PARTIAL_LINE_LENGTH) {
+        sdkWarning(`a log line longer than ${String(MAX_PARTIAL_LINE_LENGTH)} characters was cut`);
+        lines.push(partialLine.slice(0, MAX_PARTIAL_LINE_LENGTH));
+        partialLine = "";
+      }
       for (const line of lines) {
-        if (line.trim()) onEntry(parseLogLine(line));
+        if (line.trim()) handleLine(line, onEntry);
       }
       done();
     },
   });
+}
+
+/** Parse one line and pass it on; any error is reported on stderr instead of thrown. */
+function handleLine(line: string, onEntry: (entry: LogEntry) => void): void {
+  try {
+    onEntry(parseLogLine(line));
+  } catch (error) {
+    sdkWarning(`a log line could not be sent: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /**

@@ -16,7 +16,6 @@ from spanport_server.core.constants import (
     NANOS_PER_MILLISECOND,
     NO_PROJECT_DETAIL,
     NO_TRACE_DETAIL,
-    RANGE_ORDER_DETAIL,
     SPAN_RETENTION,
     TRACE_ID_PATTERN,
     TRACE_RANGE_DETAIL,
@@ -34,6 +33,7 @@ from spanport_server.schemas.trace import (
     TraceSearchResponse,
 )
 from spanport_server.services.log_search_service import ProjectLookup
+from spanport_server.services.time_range import checked_range
 from spanport_server.services.trace_cursor import decode_trace_cursor, encode_trace_cursor
 from spanport_server.services.trace_shape import build_trace_detail
 
@@ -41,14 +41,14 @@ logger = logging.getLogger(__name__)
 
 
 def span_range(start: datetime, end: datetime) -> tuple[datetime, datetime]:
-    """The range in UTC, checked: forwards, and starting within the 30 days spans are kept.
+    """The range in UTC, checked: forwards, ending at most an hour ahead, and starting within
+    the 30 days spans are kept.
 
     Raises:
-        InvalidRequestError: The range is backwards or starts too long ago.
+        InvalidRequestError: The range is backwards, ends too far ahead, is out of the calendar
+            or starts too long ago.
     """
-    start, end = start.astimezone(UTC), end.astimezone(UTC)
-    if end <= start:
-        raise InvalidRequestError(RANGE_ORDER_DETAIL)
+    start, end = checked_range(start, end)
     if start < datetime.now(UTC) - SPAN_RETENTION:
         raise InvalidRequestError(TRACE_RANGE_DETAIL)
     return start, end
@@ -118,7 +118,7 @@ class TraceService:
             min_duration_ns=request.min_duration_ms * NANOS_PER_MILLISECOND,
             errors_only=request.errors_only,
         )
-        after = decode_trace_cursor(request.cursor) if request.cursor else None
+        after = decode_trace_cursor(request.cursor, start, end) if request.cursor else None
         rows = await self._spans.search_requests(query, after, request.limit + 1)
         page = rows[: request.limit]
         has_more = len(rows) > request.limit

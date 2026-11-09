@@ -1,7 +1,10 @@
-from datetime import UTC, datetime, timedelta
+import base64
+import json
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from fakes import FakeLogSearchStore, FakeTenantStore, caller_for
+from pydantic import ValidationError
 
 from spanport_server.core.errors import InvalidRequestError, NotFoundError
 from spanport_server.core.ids import new_id
@@ -18,6 +21,9 @@ from spanport_server.services.log_cursor import decode_cursor, encode_cursor
 from spanport_server.services.log_search_service import LogSearchService
 
 pytestmark = pytest.mark.anyio
+
+RANGE_START = datetime(2026, 10, 29, 7, tzinfo=UTC)
+RANGE_END = datetime(2026, 10, 29, 8, tzinfo=UTC)
 
 
 async def setup() -> tuple[LogSearchService, FakeLogSearchStore, Caller, ProjectRef]:
@@ -59,7 +65,7 @@ async def test_returns_a_page_and_a_cursor_when_there_are_more_rows() -> None:
     assert [item.log_id for item in response.data] == [row.log_id for row in store.rows[:2]]
     assert response.has_more is True
     assert response.next_cursor is not None
-    position = decode_cursor(response.next_cursor)
+    position = decode_cursor(response.next_cursor, store.rows[2].ts, store.rows[0].ts)
     assert position.log_id == store.rows[1].log_id
 
 
@@ -152,7 +158,7 @@ def test_cursor_round_trips() -> None:
         ts=datetime(2026, 10, 29, 7, 27, 38, 832000, tzinfo=UTC), log_id=new_id()
     )
 
-    assert decode_cursor(encode_cursor(position)) == position
+    assert decode_cursor(encode_cursor(position), RANGE_START, RANGE_END) == position
 
 
 @pytest.mark.parametrize(
@@ -162,4 +168,47 @@ def test_cursor_round_trips() -> None:
 )
 def test_tampered_cursor_is_rejected(cursor: str) -> None:
     with pytest.raises(InvalidRequestError, match="cursor is not valid"):
-        decode_cursor(cursor)
+        decode_cursor(cursor, RANGE_START, RANGE_END)
+
+
+def encoded(payload: object) -> str:
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        encoded({"ts": "2026-10-29T07:30:00+00:00", "log_id": 123}),
+        encoded([1, 2]),
+        encoded({"ts": "0001-01-01T00:00:00+05:00", "log_id": str(new_id())}),
+        encoded({"ts": "2026-10-29T09:00:00+00:00", "log_id": str(new_id())}),
+        base64.urlsafe_b64encode(b"[" * 100_000).decode(),
+    ],
+    ids=["number-log-id", "not-an-object", "time-overflows-utc", "outside-the-range", "deep-json"],
+)
+def test_made_up_cursors_are_refused_not_crashed(cursor: str) -> None:
+    with pytest.raises(InvalidRequestError, match="cursor is not valid"):
+        decode_cursor(cursor, RANGE_START, RANGE_END)
+
+
+def test_a_cursor_longer_than_any_real_one_fails_validation() -> None:
+    with pytest.raises(ValidationError, match="cursor"):
+        LogSearchRequest.model_validate(
+            {
+                "project_id": str(new_id()),
+                "start": RANGE_START,
+                "end": RANGE_END,
+                "cursor": "a" * 257,
+            }
+        )
+
+
+async def test_range_may_not_end_far_ahead_or_outside_the_calendar() -> None:
+    service, _, caller, project = await setup()
+    now = datetime.now(UTC)
+    year_9999 = datetime(9999, 12, 31, 23, tzinfo=timezone(timedelta(hours=-5)))
+
+    with pytest.raises(InvalidRequestError, match="end: must be at most 1 hour from now"):
+        await service.search(caller, search_request(project, end=now + timedelta(hours=2)))
+    with pytest.raises(InvalidRequestError, match="out of range"):
+        await service.counts(caller, search_request(project, end=year_9999))

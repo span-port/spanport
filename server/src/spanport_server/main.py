@@ -6,7 +6,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from spanport_server.controllers import (
@@ -27,9 +27,14 @@ from spanport_server.controllers import (
     team_controller,
     trace_controller,
 )
-from spanport_server.core.config import Settings, load_settings
-from spanport_server.core.constants import SERVICE_NAME
+from spanport_server.core.config import ApiDocsSettings, Settings, load_settings
+from spanport_server.core.constants import API_DOCS_PATH, API_REDOC_PATH, OPENAPI_PATH, SERVICE_NAME
 from spanport_server.core.error_handlers import install_error_handlers
+from spanport_server.core.request_limits import (
+    api_limits,
+    install_rate_limits,
+    limit_public_routes,
+)
 from spanport_server.dependencies import build_alert_check_service
 from spanport_server.jobs.alert_check_job import run_alert_checks
 from spanport_server.repositories.clickhouse.database import create_clickhouse_client
@@ -58,6 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Open the Postgres pool and ClickHouse client at start-up; close them at shutdown."""
     settings = load_settings(Settings)
     app.state.settings = settings
+    app.state.api_limits = api_limits(settings)
     postgres_engine = create_postgres_engine(settings)
     app.state.postgres_sessionmaker = async_sessionmaker(postgres_engine, expire_on_commit=False)
     app.state.clickhouse_client = await create_clickhouse_client(settings)
@@ -65,7 +71,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     alert_checks = asyncio.create_task(
         run_alert_checks(
             build_alert_check_service(
-                app.state.postgres_sessionmaker, app.state.clickhouse_client, settings
+                app.state.postgres_sessionmaker,
+                app.state.clickhouse_client,
+                settings,
+                app.state.rate_limiter,
             )
         )
     )
@@ -80,13 +89,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    """Build the FastAPI app with every router and error handler registered.
+    """Build the FastAPI app with every router, error handler and rate limit registered.
+
+    The API docs are served only with SPANPORT_API_DOCS=true.
 
     Returns:
         The configured FastAPI application.
     """
-    app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
+    api_docs = load_settings(ApiDocsSettings).api_docs
+    app = FastAPI(
+        title=SERVICE_NAME,
+        lifespan=lifespan,
+        docs_url=API_DOCS_PATH if api_docs else None,
+        redoc_url=API_REDOC_PATH if api_docs else None,
+        openapi_url=OPENAPI_PATH if api_docs else None,
+        dependencies=[Depends(limit_public_routes)],
+    )
     install_error_handlers(app)
+    install_rate_limits(app)
     app.include_router(health_controller.router)
     app.include_router(otlp_logs_controller.router)
     app.include_router(otlp_traces_controller.router)

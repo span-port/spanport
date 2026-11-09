@@ -119,6 +119,16 @@ class TeamChange(StrEnum):
     DONE = "done"
     NOT_FOUND = "not_found"
     LAST_OWNER = "last_owner"
+    # The user's role is no longer the one the caller's decision was based on.
+    ROLE_CHANGED = "role_changed"
+
+
+@dataclass(frozen=True)
+class RevokedGrants:
+    """What was taken back from a removed or demoted user: their open invites and admin keys."""
+
+    invites_cancelled: int
+    keys_revoked: int
 
 
 @dataclass(frozen=True)

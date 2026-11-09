@@ -13,8 +13,9 @@ spanport.init({
   // From Setup → API keys → Data keys in Spanport (shown once)
   dataKey: "sp_ingest_...",
   service: "orders-api",
-  // Defaults: http://localhost:4318 and http://localhost:8000
+  // Default: http://localhost:4318
   collectorUrl: "https://spanport-collector.example.com",
+  // Your Spanport address (the UI's URL; it forwards /api to the server)
   serverUrl: "https://spanport.example.com",
 });
 
@@ -40,8 +41,8 @@ const logger = winston.createLogger({
 - **`console.debug/log/info/warn/error` are sent automatically**; what your app prints doesn't change. Turn this off with `captureConsole: false`.
 - **Logs are sent in the background**, in batches. A normal exit sends what is left; on `SIGTERM`, send it yourself: `process.on("SIGTERM", async () => { await spanport.shutdown(); process.exit(0); })`.
 - **Logs inside an OpenTelemetry span** carry its `trace_id` and `span_id`; so do pino lines that include them.
-- **Wrong key?** At start-up the SDK asks the server once whether the key is valid and prints a clear error on stderr if not. Pass `checkKey: false` if the app cannot reach the server.
-- **Use `https://` for anything beyond your own machine or Docker network.** The data key is sent with every batch.
+- **Wrong key?** At start-up the SDK asks `serverUrl` once whether the key is valid and prints a clear error on stderr if not. Set `serverUrl` to your Spanport address (the UI's URL, since it forwards `/api` to the server). Without it, the check goes to `http://localhost:8000` only when the collector is on localhost too; with a collector elsewhere the check is skipped (with a note on stderr), so the key is never sent to whatever happens to answer on your own machine. Pass `checkKey: false` if the app cannot reach the server.
+- **Use `https://` for anything beyond your own machine or Docker network.** The data key is sent with every batch; the SDK warns once on stderr when the collector or server is a plain `http://` address on another machine.
 - **It never breaks your app.** `init()` never throws; setup and key problems are printed on stderr as `spanport: ...` and the app carries on. An unreachable collector is not reported yet (see [Troubleshooting](#nothing-arrives-and-there-is-no-error)).
 
 Node.js 22.15 or newer. ES module; CommonJS apps can `require("spanport")`.
@@ -186,7 +187,7 @@ The SDK sends only what a log line carries. Add them as fields named `client.ip`
 
 ### "could not reach ... to check data key"
 
-The key check couldn't reach `serverUrl` (default `http://localhost:8000`). Logs are still sent to the collector, but nobody has confirmed the key. Point `serverUrl` at the Spanport server, or pass `checkKey: false` if the app has no route to it.
+The key check couldn't reach `serverUrl` (`http://localhost:8000` when it isn't set and the collector is local). Logs are still sent to the collector, but nobody has confirmed the key. Point `serverUrl` at your Spanport address (the UI's URL), or pass `checkKey: false` if the app has no route to it.
 
 ## Development
 

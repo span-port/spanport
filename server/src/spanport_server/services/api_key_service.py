@@ -69,6 +69,7 @@ class ApiKeyStore(Protocol):
         scopes: tuple[Scope, ...] = (),
         expires_at: datetime | None = None,
         name: str | None = None,
+        created_by: UuidV7 | None = None,
     ) -> ApiKeyRecord:
         """Store a key and return it."""
         ...
@@ -148,7 +149,7 @@ class ApiKeyService:
         project = await self._tenants.get_or_create_project(
             org_slug, client_slug, project_slug, environment
         )
-        return await self._insert_data_key(project.org_id, project.project_id, None)
+        return await self._insert_data_key(project.org_id, project.project_id, None, None)
 
     async def create_admin_key(
         self, org_slug: str, scopes: tuple[Scope, ...], expires_in_days: int
@@ -162,10 +163,13 @@ class ApiKeyService:
         check_slug("org", org_slug)
         check_admin_key(scopes, expires_in_days)
         org_id = await self._require_org(org_slug)
-        return await self._insert_admin_key(org_id, scopes, expires_in_days, None)
+        return await self._insert_admin_key(org_id, scopes, expires_in_days, None, None)
 
     async def create_key(self, caller: Caller, request: CreateKeyRequest) -> CreatedKey:
         """Create a named key from the UI: a data key for an org's project, or an admin key.
+
+        The key records who created it, so removing or demoting that person revokes their
+        admin keys.
 
         Raises:
             InvalidRequestError: A data key without a project, an admin key with a project or
@@ -181,12 +185,16 @@ class ApiKeyService:
                 raise NotFoundError(KEY_PROJECT_DETAIL)
             if project.archived:
                 raise InvalidRequestError(ARCHIVED_PROJECT_DETAIL)
-            return await self._insert_data_key(caller.org_id, request.project_id, name)
+            return await self._insert_data_key(
+                caller.org_id, request.project_id, name, caller.user_id
+            )
         if request.project_id is not None:
             raise InvalidRequestError(ADMIN_KEY_PROJECT_DETAIL)
         scopes = tuple(dict.fromkeys(request.scopes))
         check_admin_key(scopes, request.expires_in_days)
-        return await self._insert_admin_key(caller.org_id, scopes, request.expires_in_days, name)
+        return await self._insert_admin_key(
+            caller.org_id, scopes, request.expires_in_days, name, caller.user_id
+        )
 
     async def list_page(self, caller: Caller, cursor: str | None, limit: int) -> ApiKeyListResponse:
         """One page of the caller's organization's keys, newest first, without hashes.
@@ -262,7 +270,7 @@ class ApiKeyService:
         logger.info("key deleted id=%s %s", key_id, caller.label)
 
     async def _insert_data_key(
-        self, org_id: UuidV7, project_id: UuidV7, name: str | None
+        self, org_id: UuidV7, project_id: UuidV7, name: str | None, created_by: UuidV7 | None
     ) -> CreatedKey:
         """Store a new data key and log its id and last four characters (never the key)."""
         raw_key = new_raw_key(KeyType.INGEST)
@@ -273,6 +281,7 @@ class ApiKeyService:
             hash_api_key(raw_key),
             visible_suffix(raw_key),
             name=name,
+            created_by=created_by,
         )
         logger.info(
             "data key created id=%s key=...%s org=%s project=%s",
@@ -284,7 +293,12 @@ class ApiKeyService:
         return CreatedKey(raw_key=raw_key, record=record)
 
     async def _insert_admin_key(
-        self, org_id: UuidV7, scopes: tuple[Scope, ...], expires_in_days: int, name: str | None
+        self,
+        org_id: UuidV7,
+        scopes: tuple[Scope, ...],
+        expires_in_days: int,
+        name: str | None,
+        created_by: UuidV7 | None,
     ) -> CreatedKey:
         """Store a new admin key and log its id, scopes and expiry (never the key)."""
         raw_key = new_raw_key(KeyType.ADMIN)
@@ -297,6 +311,7 @@ class ApiKeyService:
             scopes=scopes,
             expires_at=datetime.now(UTC) + timedelta(days=expires_in_days),
             name=name,
+            created_by=created_by,
         )
         logger.info(
             "admin key created id=%s key=...%s org=%s scopes=%s expires=%s",

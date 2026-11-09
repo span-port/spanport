@@ -5,7 +5,12 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from spanport_server.core.constants import FULL_ACCESS_ROLES
-from spanport_server.core.errors import ConflictError, DeliveryError, StorageUnavailableError
+from spanport_server.core.errors import (
+    ConflictError,
+    DeliveryError,
+    InvalidRequestError,
+    StorageUnavailableError,
+)
 from spanport_server.core.ids import UuidV7, new_id
 from spanport_server.core.key_hashing import hash_api_key, visible_suffix
 from spanport_server.schemas.alert import (
@@ -14,6 +19,7 @@ from spanport_server.schemas.alert import (
     AlertRuleRecord,
     AlertState,
     AssigneeItem,
+    AssignOutcome,
     OpenAlert,
 )
 from spanport_server.schemas.api_key import ApiKeyRecord, KeyType, Scope
@@ -44,14 +50,15 @@ from spanport_server.schemas.team import (
     InviteDetails,
     InviteItem,
     ProjectAccess,
+    RevokedGrants,
     TeamChange,
     UserItem,
 )
 from spanport_server.schemas.tenant import ProjectItem, ProjectRef
 from spanport_server.schemas.trace import RequestItem, RequestQuery, SpanPosition, StoredSpan
 
-SAMPLE_DATA_KEY = "sp_ingest_test-key-0000000000000000000000a1b2"
-SAMPLE_ADMIN_KEY = "sp_admin_test-key-00000000000000000000000c3d4"
+SAMPLE_DATA_KEY = "sp_ingest_test-key-000000000000000000000000000000a1b2"
+SAMPLE_ADMIN_KEY = "sp_admin_test-key-000000000000000000000000000000c3d4"
 
 
 class FakeApiKeyStore:
@@ -59,8 +66,10 @@ class FakeApiKeyStore:
 
     def __init__(self) -> None:
         self.records_by_hash: dict[str, ApiKeyRecord] = {}
+        self.lookups = 0
 
     async def find_by_hash(self, key_hash: str) -> ApiKeyRecord | None:
+        self.lookups += 1
         return self.records_by_hash.get(key_hash)
 
     async def insert_key(
@@ -73,6 +82,7 @@ class FakeApiKeyStore:
         scopes: tuple[Scope, ...] = (),
         expires_at: datetime | None = None,
         name: str | None = None,
+        created_by: UuidV7 | None = None,
     ) -> ApiKeyRecord:
         record = ApiKeyRecord(
             id=new_id(),
@@ -85,6 +95,7 @@ class FakeApiKeyStore:
             expires_at=expires_at,
             revoked_at=None,
             name=name,
+            created_by=created_by,
         )
         self.records_by_hash[key_hash] = record
         return record
@@ -263,15 +274,15 @@ class FakeUserStore:
         self.invites: dict[UuidV7, FakeInvite] = {}
         self.login_failures: dict[str, list[datetime]] = {}
 
-    async def recent_login_failures(self, email_hash: str, since: datetime) -> list[datetime]:
-        return sorted(at for at in self.login_failures.get(email_hash, []) if at > since)
-
-    async def record_login_failure(
-        self, email_hash: str, now: datetime, forget_before: datetime
-    ) -> None:
+    async def reserve_login_attempt(
+        self, email_hash: str, now: datetime, since: datetime, max_failures: int
+    ) -> list[datetime]:
         for times in self.login_failures.values():
-            times[:] = [at for at in times if at >= forget_before]
-        self.login_failures.setdefault(email_hash, []).append(now)
+            times[:] = [at for at in times if at > since]
+        failures = sorted(self.login_failures.get(email_hash, []))
+        if len(failures) < max_failures:
+            self.login_failures.setdefault(email_hash, []).append(now)
+        return failures
 
     async def clear_login_failures(self, email_hash: str) -> None:
         self.login_failures.pop(email_hash, None)
@@ -281,6 +292,20 @@ class FakeUserStore:
 
     async def insert_setup_token(self, token_hash: str, expires_at: datetime) -> None:
         self.setup_tokens[token_hash] = expires_at
+
+    async def expire_setup_tokens(self, now: datetime) -> int:
+        live = [
+            token_hash
+            for token_hash, expires_at in self.setup_tokens.items()
+            if expires_at > now and token_hash not in self.used_tokens
+        ]
+        for token_hash in live:
+            self.setup_tokens[token_hash] = now
+        return len(live)
+
+    async def setup_token_usable(self, token_hash: str, now: datetime) -> bool:
+        expires_at = self.setup_tokens.get(token_hash)
+        return expires_at is not None and expires_at > now and token_hash not in self.used_tokens
 
     async def create_owner(
         self,
@@ -391,6 +416,7 @@ class FakeInvite:
     project_ids: list[UuidV7] = dataclasses.field(default_factory=list)
     accepted: bool = False
     cancelled: bool = False
+    invited_by: UuidV7 | None = None
 
     def is_open(self, now: datetime) -> bool:
         return not self.accepted and not self.cancelled and self.expires_at > now
@@ -401,9 +427,17 @@ class FakeTeamStore:
     repository's keep-an-owner rule.
     """
 
-    def __init__(self, users: FakeUserStore, tenants: FakeTenantStore | None = None) -> None:
+    def __init__(
+        self,
+        users: FakeUserStore,
+        tenants: FakeTenantStore | None = None,
+        keys: FakeApiKeyStore | None = None,
+    ) -> None:
         self.users = users
         self.tenants = tenants or FakeTenantStore()
+        self.keys = keys or FakeApiKeyStore()
+        # Set by a test to change a user's role between the service's check and the change.
+        self.role_changed_meanwhile: Role | None = None
 
     async def set_project_access(
         self, org_id: UuidV7, user_id: UuidV7, all_projects: bool, project_ids: list[UuidV7]
@@ -428,18 +462,39 @@ class FakeTeamStore:
     async def find_user(self, org_id: UuidV7, user_id: UuidV7) -> UserItem | None:
         return next((item for item in self._active(org_id) if item.id == user_id), None)
 
-    async def change_role(self, org_id: UuidV7, user_id: UuidV7, role: Role) -> TeamChange:
-        outcome = await self._owner_kept(org_id, user_id, role)
+    async def change_role(
+        self, org_id: UuidV7, user_id: UuidV7, role: Role, expected_role: Role
+    ) -> TeamChange:
+        outcome = await self._owner_kept(org_id, user_id, role, expected_role)
         if outcome is TeamChange.DONE:
             user, password_hash = self.users.users[user_id]
             self.users.users[user_id] = (dataclasses.replace(user, role=role), password_hash)
         return outcome
 
-    async def disable_user(self, org_id: UuidV7, user_id: UuidV7, now: datetime) -> TeamChange:
-        outcome = await self._owner_kept(org_id, user_id, None)
+    async def disable_user(
+        self, org_id: UuidV7, user_id: UuidV7, now: datetime, expected_role: Role
+    ) -> TeamChange:
+        outcome = await self._owner_kept(org_id, user_id, None, expected_role)
         if outcome is TeamChange.DONE:
             self.users.disabled.add(user_id)
         return outcome
+
+    async def revoke_grants(self, org_id: UuidV7, user_id: UuidV7, now: datetime) -> RevokedGrants:
+        cancelled = 0
+        for invite in self.users.invites.values():
+            if invite.org_id == org_id and invite.invited_by == user_id and invite.is_open(now):
+                invite.cancelled = True
+                cancelled += 1
+        revoked = 0
+        for key_hash, record in self.keys.records_by_hash.items():
+            if (record.org_id, record.created_by, record.key_type) == (
+                org_id,
+                user_id,
+                KeyType.ADMIN,
+            ) and record.revoked_at is None:
+                self.keys.records_by_hash[key_hash] = dataclasses.replace(record, revoked_at=now)
+                revoked += 1
+        return RevokedGrants(invites_cancelled=cancelled, keys_revoked=revoked)
 
     async def find_account(self, email: str) -> AccountOwner | None:
         for user, _ in self.users.users.values():
@@ -470,6 +525,7 @@ class FakeTeamStore:
             expires_at,
             access.all_projects,
             list(access.project_ids),
+            invited_by=invited_by,
         )
         return self._item(invite_id, now)
 
@@ -506,11 +562,18 @@ class FakeTeamStore:
         ]
 
     async def _owner_kept(
-        self, org_id: UuidV7, user_id: UuidV7, new_role: Role | None
+        self, org_id: UuidV7, user_id: UuidV7, new_role: Role | None, expected_role: Role
     ) -> TeamChange:
+        if self.role_changed_meanwhile is not None and user_id in self.users.users:
+            user, password_hash = self.users.users[user_id]
+            changed = dataclasses.replace(user, role=self.role_changed_meanwhile)
+            self.users.users[user_id] = (changed, password_hash)
         active = self._active(org_id)
-        if not any(item.id == user_id for item in active):
+        target = next((item for item in active if item.id == user_id), None)
+        if target is None:
             return TeamChange.NOT_FOUND
+        if target.role is not expected_role:
+            return TeamChange.ROLE_CHANGED
         owners = {item.id for item in active if item.role is Role.OWNER}
         if owners == {user_id} and new_role is not Role.OWNER:
             return TeamChange.LAST_OWNER
@@ -536,6 +599,7 @@ class FakeSession:
     csrf_hash: str
     last_seen_at: datetime
     revoked_at: datetime | None = None
+    created_at: datetime = dataclasses.field(default_factory=lambda: datetime.now(UTC))
 
 
 class FakeSessionStore:
@@ -548,10 +612,12 @@ class FakeSessionStore:
         self.sessions[token_hash] = FakeSession(user_id, csrf_hash, datetime.now(UTC))
 
     async def touch_active(
-        self, token_hash: str, idle_since: datetime, now: datetime
+        self, token_hash: str, idle_since: datetime, created_since: datetime, now: datetime
     ) -> tuple[UuidV7, str] | None:
         session = self.sessions.get(token_hash)
         if session is None or session.revoked_at or session.last_seen_at < idle_since:
+            return None
+        if session.created_at < created_since:
             return None
         session.last_seen_at = now
         return session.user_id, session.csrf_hash
@@ -595,16 +661,19 @@ class FakeLogSearchStore:
 
 
 class FakeLogWriter:
-    """Keeps inserted rows; can pretend ClickHouse is down."""
+    """Keeps inserted rows; can pretend ClickHouse is down or refuses a value."""
 
-    def __init__(self, storage_down: bool = False) -> None:
+    def __init__(self, storage_down: bool = False, refuses_values: bool = False) -> None:
         self.rows: list[LogRow] = []
         self.storage_down = storage_down
+        self.refuses_values = refuses_values
         self.deleted_projects: list[tuple[UuidV7, UuidV7]] = []
 
     async def insert_logs(self, rows: Sequence[LogRow]) -> None:
         if self.storage_down:
             raise StorageUnavailableError("Log storage is unavailable. Retry later.")
+        if self.refuses_values:
+            raise InvalidRequestError("Storage refused a value in this batch.")
         self.rows.extend(rows)
 
     async def delete_project_data(self, org_id: UuidV7, project_id: UuidV7) -> None:
@@ -614,15 +683,18 @@ class FakeLogWriter:
 
 
 class FakeSpanWriter:
-    """Keeps inserted span rows; can pretend ClickHouse is down."""
+    """Keeps inserted span rows; can pretend ClickHouse is down or refuses a value."""
 
-    def __init__(self, storage_down: bool = False) -> None:
+    def __init__(self, storage_down: bool = False, refuses_values: bool = False) -> None:
         self.rows: list[SpanRow] = []
         self.storage_down = storage_down
+        self.refuses_values = refuses_values
 
     async def insert_spans(self, rows: Sequence[SpanRow]) -> None:
         if self.storage_down:
             raise StorageUnavailableError("Log storage is unavailable. Retry later.")
+        if self.refuses_values:
+            raise InvalidRequestError("Storage refused a value in this batch.")
         self.rows.extend(rows)
 
 
@@ -921,12 +993,14 @@ class FakeAlertEventStore:
         alert.matched_count = matched_count
         return True
 
-    async def assign(self, org_id: UuidV7, event_id: UuidV7, user_id: UuidV7) -> bool:
+    async def assign(self, org_id: UuidV7, event_id: UuidV7, user_id: UuidV7) -> AssignOutcome:
         alert = self._open(org_id, event_id)
         if alert is None:
-            return False
+            return AssignOutcome.NOT_FOUND
+        if alert.assigned_to == user_id:
+            return AssignOutcome.UNCHANGED
         alert.assigned_to = user_id
-        return True
+        return AssignOutcome.ASSIGNED
 
     async def find_event_rule(self, org_id: UuidV7, event_id: UuidV7) -> AlertRuleRecord | None:
         alert = self.alerts.get(event_id)
@@ -1024,8 +1098,12 @@ class FakeEmailSender:
         # (recipients, subject, plain text, HTML) per email sent.
         self.sent: list[tuple[list[str], str, str, str]] = []
         self.refuse = refuse
+        # An email whose subject contains this raises an unexpected error (a bug, not SMTP).
+        self.crash_on_subject: str | None = None
 
     async def send(self, recipients: list[str], subject: str, text: str, html: str) -> None:
+        if self.crash_on_subject is not None and self.crash_on_subject in subject:
+            raise RuntimeError("unexpected failure while sending")
         if self.refuse:
             raise DeliveryError("Email could not be sent: SMTPRecipientsRefused.")
         self.sent.append((recipients, subject, text, html))

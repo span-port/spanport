@@ -4,6 +4,7 @@ The same checks as /v1/logs, in the same order, so unauthenticated requests neve
 parser: key → content type → body size → bounded gzip decompression → protobuf decode.
 """
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Request, Response
@@ -39,14 +40,16 @@ async def export_traces(
 
     Raises:
         UnsupportedMediaTypeError: Not protobuf, or an encoding other than gzip.
-        PayloadTooLargeError: Over 10 MB sent or 50 MB after decompression.
+        PayloadTooLargeError: Over 10 MB sent or after decompression, or over 5,000 records.
         InvalidRequestError: Not valid gzip or not a valid OTLP request.
         StorageUnavailableError: ClickHouse is down; the collector retries.
     """
     if media_type(content_type) != PROTOBUF_CONTENT_TYPE:
         raise UnsupportedMediaTypeError(f"Send OTLP traces as {PROTOBUF_CONTENT_TYPE}.")
     body = await read_body_capped(request, MAX_INGEST_BODY_BYTES)
-    await ingest_service.ingest(key, decode_otlp_body(body, content_encoding))
+    # Decompression is CPU work: a worker thread keeps the event loop serving other requests.
+    payload = await asyncio.to_thread(decode_otlp_body, body, content_encoding)
+    await ingest_service.ingest(key, payload)
     return Response(
         ExportTraceServiceResponse().SerializeToString(), media_type=PROTOBUF_CONTENT_TYPE
     )

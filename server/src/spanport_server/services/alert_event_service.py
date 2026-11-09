@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from spanport_server.core.constants import (
+    MANAGER_ROLES,
     NO_ASSIGNEE_DETAIL,
     NO_OPEN_ALERT_DETAIL,
     NO_PROJECT_DETAIL,
@@ -24,6 +25,8 @@ from spanport_server.schemas.alert import (
     AlertRuleRecord,
     AssigneeItem,
     AssigneeListResponse,
+    AssigneeView,
+    AssignOutcome,
 )
 from spanport_server.schemas.auth import Caller
 from spanport_server.services.alert_email import assigned_email
@@ -53,8 +56,9 @@ class AlertEventStore(Protocol):
         """Mark a firing alert as handled by (and assigned to) this person; False if none."""
         ...
 
-    async def assign(self, org_id: UuidV7, event_id: UuidV7, user_id: UuidV7) -> bool:
-        """Give an open alert to this person; False when none matches."""
+    async def assign(self, org_id: UuidV7, event_id: UuidV7, user_id: UuidV7) -> AssignOutcome:
+        """Give an open alert to this person: ASSIGNED, UNCHANGED (already theirs) or
+        NOT_FOUND."""
         ...
 
     async def resolve(
@@ -121,17 +125,30 @@ class AlertEventService:
         )
 
     async def list_assignees(self, caller: Caller, project_id: UuidV7) -> AssigneeListResponse:
-        """Everyone the project's alerts can be assigned to.
+        """Everyone the project's alerts can be assigned to. Only owners and admins see their
+        emails; members and viewers get names only.
 
         Raises:
             NotFoundError: The project isn't in the caller's organization.
         """
         await self._check_project(caller, project_id)
         people = await self._assignees.list_assignees(caller.org_id, project_id)
+        with_emails = caller.role in MANAGER_ROLES
         logger.info(
-            "alert assignees listed %s project=%s rows=%d", caller.label, project_id, len(people)
+            "alert assignees listed %s project=%s rows=%d emails=%s",
+            caller.label,
+            project_id,
+            len(people),
+            with_emails,
         )
-        return AssigneeListResponse(data=people)
+        return AssigneeListResponse(
+            data=[
+                AssigneeView(
+                    id=person.id, name=person.name, email=person.email if with_emails else None
+                )
+                for person in people
+            ]
+        )
 
     async def acknowledge(self, caller: Caller, event_id: UuidV7) -> None:
         """Say "I'm on it" for a firing alert: it is assigned to the caller.
@@ -147,7 +164,8 @@ class AlertEventService:
         logger.info("alert acknowledged %s id=%s", caller.label, event_id)
 
     async def assign(self, caller: Caller, event_id: UuidV7, assignee_id: UuidV7) -> None:
-        """Give an open alert to someone, who is emailed (unless it's the caller).
+        """Give an open alert to someone, who is emailed (unless it's the caller, or the alert
+        was already theirs, so repeating the call never re-sends the email).
 
         A failed email is logged; the alert stays assigned.
 
@@ -161,10 +179,17 @@ class AlertEventService:
         assignee = await self._assignees.find_assignee(caller.org_id, rule.project_id, assignee_id)
         if assignee is None:
             raise InvalidRequestError(NO_ASSIGNEE_DETAIL)
-        if not await self._events.assign(caller.org_id, event_id, assignee.id):
+        outcome = await self._events.assign(caller.org_id, event_id, assignee.id)
+        if outcome == AssignOutcome.NOT_FOUND:
             raise NotFoundError(NO_OPEN_ALERT_DETAIL)
-        logger.info("alert assigned %s id=%s assignee=%s", caller.label, event_id, assignee.id)
-        if assignee.id != user_id:
+        logger.info(
+            "alert assigned %s id=%s assignee=%s outcome=%s",
+            caller.label,
+            event_id,
+            assignee.id,
+            outcome,
+        )
+        if outcome == AssignOutcome.ASSIGNED and assignee.id != user_id:
             await self._email_assignee(caller, rule, assignee, user_id)
 
     async def resolve(self, caller: Caller, event_id: UuidV7, note: str) -> None:

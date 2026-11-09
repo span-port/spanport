@@ -18,6 +18,7 @@ from spanport_server.core.constants import (
     DEFAULT_ALERTS_LIMIT,
     MAX_ALERT_BODY_BYTES,
     MAX_ALERTS_LIMIT,
+    MAX_CURSOR_LENGTH,
     RESOLVE_ALERT_EVENT_PATH,
     TEST_ALERT_RULE_PATH,
 )
@@ -26,6 +27,7 @@ from spanport_server.core.request_body import parse_json_body
 from spanport_server.dependencies import (
     get_alert_event_service,
     get_alert_rule_service,
+    limit_alert_tests,
     require_manager,
     require_responder,
     require_signed_in,
@@ -69,7 +71,7 @@ async def list_rules(
     caller: Annotated[Caller, Depends(require_signed_in)],
     rule_service: Annotated[AlertRuleService, Depends(get_alert_rule_service)],
     limit: Limit = DEFAULT_ALERTS_LIMIT,
-    cursor: Annotated[str | None, Query()] = None,
+    cursor: Annotated[str | None, Query(max_length=MAX_CURSOR_LENGTH)] = None,
 ) -> AlertRuleListResponse:
     """One page of a project's alert rules.
 
@@ -132,16 +134,22 @@ async def delete_rule(
     await rule_service.delete_rule(caller, rule_id)
 
 
-@router.post(TEST_ALERT_RULE_PATH, status_code=HTTPStatus.NO_CONTENT)
+@router.post(
+    TEST_ALERT_RULE_PATH,
+    status_code=HTTPStatus.NO_CONTENT,
+    dependencies=[Depends(limit_alert_tests)],
+)
 async def send_test(
     rule_id: UuidV7,
     caller: Annotated[Caller, Depends(require_manager)],
     rule_service: Annotated[AlertRuleService, Depends(get_alert_rule_service)],
 ) -> None:
-    """Email a test message to the rule's recipients.
+    """Email a test message to the rule's recipients (once a minute per rule, a daily cap per
+    person).
 
     Raises:
         NotSignedInError (401), NotAllowedError / CsrfError (403), NotFoundError (404),
+        RateLimitedError: tested too often, or the organization's hourly email cap (429),
         DeliveryError: email not set up or refused (502).
     """
     await rule_service.send_test(caller, rule_id)
@@ -153,7 +161,7 @@ async def list_events(
     caller: Annotated[Caller, Depends(require_signed_in)],
     event_service: Annotated[AlertEventService, Depends(get_alert_event_service)],
     limit: Limit = DEFAULT_ALERTS_LIMIT,
-    cursor: Annotated[str | None, Query()] = None,
+    cursor: Annotated[str | None, Query(max_length=MAX_CURSOR_LENGTH)] = None,
 ) -> AlertEventListResponse:
     """One page of a project's alerts, newest first.
 

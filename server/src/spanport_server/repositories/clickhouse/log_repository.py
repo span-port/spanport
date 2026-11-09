@@ -1,20 +1,28 @@
 """Writes rows to the ClickHouse logs table, and deletes a deleted project's logs."""
 
+import struct
 from collections.abc import Sequence
 from dataclasses import fields
 
 from clickhouse_connect.driver.asyncclient import AsyncClient
-from clickhouse_connect.driver.exceptions import OperationalError
+from clickhouse_connect.driver.exceptions import DataError, OperationalError
 
 from spanport_server.core.constants import (
+    CLICKHOUSE_INSERT_CHUNK_ROWS,
     CLICKHOUSE_INSERT_SETTINGS,
+    CLICKHOUSE_WRITE_SETTINGS,
     LOGS_TABLE,
+    STORAGE_REFUSED_DETAIL,
     STORAGE_UNAVAILABLE_DETAIL,
 )
-from spanport_server.core.errors import StorageUnavailableError
+from spanport_server.core.errors import InvalidRequestError, StorageUnavailableError
 from spanport_server.core.ids import UuidV7
 from spanport_server.schemas.log_row import LogRow
 
+# How the driver reports a value a column can't hold: DataError, or the serializer's own error.
+INSERT_DATA_ERRORS = (DataError, OverflowError, ValueError, struct.error)
+# Inserts wait until the rows are on disk and aren't held to the read limits.
+INSERT_SETTINGS = {**CLICKHOUSE_INSERT_SETTINGS, **CLICKHOUSE_WRITE_SETTINGS}
 LOG_COLUMNS = [field.name for field in fields(LogRow)]
 # A lightweight delete: rows vanish from queries at once and are removed when parts merge.
 DELETE_PROJECT_LOGS_SQL = (
@@ -41,15 +49,20 @@ class LogRepository:
             rows: Log rows to insert.
 
         Raises:
+            InvalidRequestError: A value doesn't fit its column; retrying won't help.
             StorageUnavailableError: ClickHouse can't be reached; the caller should retry.
         """
-        data = [[getattr(row, column) for column in LOG_COLUMNS] for row in rows]
-        try:
-            await self._client.insert(
-                LOGS_TABLE, data, column_names=LOG_COLUMNS, settings=CLICKHOUSE_INSERT_SETTINGS
-            )
-        except OperationalError as error:
-            raise StorageUnavailableError(STORAGE_UNAVAILABLE_DETAIL) from error
+        for first in range(0, len(rows), CLICKHOUSE_INSERT_CHUNK_ROWS):
+            chunk = rows[first : first + CLICKHOUSE_INSERT_CHUNK_ROWS]
+            data = [[getattr(row, column) for column in LOG_COLUMNS] for row in chunk]
+            try:
+                await self._client.insert(
+                    LOGS_TABLE, data, column_names=LOG_COLUMNS, settings=INSERT_SETTINGS
+                )
+            except INSERT_DATA_ERRORS as error:
+                raise InvalidRequestError(STORAGE_REFUSED_DETAIL) from error
+            except OperationalError as error:
+                raise StorageUnavailableError(STORAGE_UNAVAILABLE_DETAIL) from error
 
     async def delete_project_logs(self, org_id: UuidV7, project_id: UuidV7) -> None:
         """Delete every log of one project of one organization.
@@ -61,6 +74,7 @@ class LogRepository:
             await self._client.command(
                 DELETE_PROJECT_LOGS_SQL,
                 parameters={"org_id": str(org_id), "project_id": str(project_id)},
+                settings=CLICKHOUSE_WRITE_SETTINGS,
             )
         except OperationalError as error:
             raise StorageUnavailableError(STORAGE_UNAVAILABLE_DETAIL) from error

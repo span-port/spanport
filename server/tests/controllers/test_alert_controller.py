@@ -193,3 +193,18 @@ async def test_anyone_signed_in_reads_the_alert_settings(browser: Browser) -> No
         "max_window_minutes": 60,
         "max_rules_per_project": 50,
     }
+
+
+async def test_a_rule_can_be_tested_once_a_minute(browser: Browser) -> None:
+    await browser.sign_in("owner@example.com")
+    created = await browser.send("POST", "/api/v1/alert-rules", browser.rule())
+    rule_id = created.json()["id"]
+
+    first = await browser.send("POST", f"/api/v1/alert-rules/{rule_id}/test")
+    second = await browser.send("POST", f"/api/v1/alert-rules/{rule_id}/test")
+
+    assert first.status_code == 204
+    assert second.status_code == 429
+    assert second.json()["code"] == "rate_limited"
+    assert int(second.headers["Retry-After"]) > 0
+    assert len(browser.email.sent) == 1

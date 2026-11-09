@@ -12,6 +12,7 @@ from spanport_server.core.constants import (
     INVITE_PATH,
     INVITES_PATH,
     MAX_AUTH_BODY_BYTES,
+    MAX_CURSOR_LENGTH,
     MAX_USERS_LIMIT,
     USER_PATH,
     USER_PROJECTS_PATH,
@@ -42,7 +43,7 @@ async def list_users(
     caller: Annotated[Caller, Depends(require_manager)],
     team_service: Annotated[TeamService, Depends(get_team_service)],
     limit: Limit = DEFAULT_USERS_LIMIT,
-    cursor: Annotated[str | None, Query()] = None,
+    cursor: Annotated[str | None, Query(max_length=MAX_CURSOR_LENGTH)] = None,
 ) -> UserListResponse:
     """One page of the organization's active users.
 
@@ -108,7 +109,7 @@ async def list_invites(
     caller: Annotated[Caller, Depends(require_manager)],
     team_service: Annotated[TeamService, Depends(get_team_service)],
     limit: Limit = DEFAULT_USERS_LIMIT,
-    cursor: Annotated[str | None, Query()] = None,
+    cursor: Annotated[str | None, Query(max_length=MAX_CURSOR_LENGTH)] = None,
 ) -> InviteListResponse:
     """One page of invites that are waiting to be accepted.
 

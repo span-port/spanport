@@ -11,11 +11,12 @@ from opentelemetry.proto.common.v1.common_pb2 import (
 from opentelemetry.proto.logs.v1.logs_pb2 import LogRecord, ResourceLogs, ScopeLogs
 from otlp_samples import SAMPLE_TIME_NANOS, make_record, make_request
 
-from spanport_server.core.errors import InvalidRequestError
+from spanport_server.core.errors import InvalidRequestError, PayloadTooLargeError
 from spanport_server.core.ids import new_id
 from spanport_server.schemas.tenant import ProjectRef
 from spanport_server.services.otlp_log_parser import (
     any_value_to_text,
+    build_log_rows,
     decode_logs_request,
     drop_expired,
     level_name,
@@ -175,3 +176,57 @@ def test_empty_record_still_becomes_a_row() -> None:
     assert row.message == ""
     assert row.trace_id == ""
     assert row.level == "UNSPECIFIED"
+
+
+# 2^64 - 1 nanoseconds is in the year 2554, past what DateTime64(9) can store (2262).
+LARGEST_UNIX_NANOS = 2**64 - 1
+
+
+def test_an_observed_time_far_in_the_future_is_replaced_by_received_time() -> None:
+    record = make_record(time_unix_nano=SAMPLE_TIME_NANOS)
+    record.observed_time_unix_nano = LARGEST_UNIX_NANOS
+
+    [row] = to_log_rows(make_request(record), PROJECT, RECEIVED_AT)
+
+    assert row.observed_ts == RECEIVED_AT
+
+
+def test_a_time_past_what_storage_holds_is_replaced_by_received_time() -> None:
+    [row] = to_log_rows(
+        make_request(make_record(time_unix_nano=LARGEST_UNIX_NANOS)), PROJECT, RECEIVED_AT
+    )
+
+    assert row.ts == RECEIVED_AT
+
+
+@pytest.mark.parametrize(("sent", "stored"), [(-5, 0), (17, 17), (300, 255)])
+def test_severity_number_is_kept_within_what_storage_holds(sent: int, stored: int) -> None:
+    [row] = to_log_rows(make_request(make_record(severity_number=sent)), PROJECT, RECEIVED_AT)
+
+    assert row.severity_number == stored
+
+
+def test_long_level_text_service_name_and_attribute_keys_are_cut() -> None:
+    record = make_record(severity_number=0, attributes={"k" * 1_000: "value"})
+    record.severity_text = "warn" * 100
+
+    [row] = to_log_rows(make_request(record, service="s" * 1_000), PROJECT, RECEIVED_AT)
+
+    assert row.level == "WARN" * 8
+    assert row.service == "s" * 200
+    assert row.attributes == {"k" * 256: "value"}
+
+
+def test_build_log_rows_decodes_and_flattens() -> None:
+    payload = make_request(make_record("a"), make_record("b")).SerializeToString()
+
+    rows = build_log_rows(payload, PROJECT, RECEIVED_AT)
+
+    assert [row.message for row in rows] == ["a", "b"]
+
+
+def test_build_log_rows_refuses_more_than_5000_records() -> None:
+    payload = make_request(*[LogRecord() for _ in range(5_001)]).SerializeToString()
+
+    with pytest.raises(PayloadTooLargeError):
+        build_log_rows(payload, PROJECT, RECEIVED_AT)

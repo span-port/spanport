@@ -27,3 +27,7 @@ class ApiKey(Base):
     scopes: Mapped[list[str]] = mapped_column(ARRAY(String), server_default="{}")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Who made it in the UI, so removing or demoting them revokes their admin keys.
+    created_by: Mapped[UuidV7 | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )

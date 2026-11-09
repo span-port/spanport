@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from spanport_server.clients.email_client import EmailClient
 from spanport_server.core.config import Settings
 from spanport_server.core.constants import (
+    API_KEY_RATE_KEY,
+    AUTHORIZATION_HEADER,
     BEARER_PREFIX,
     CSRF_HEADER,
     MANAGER_ROLES,
@@ -19,8 +21,12 @@ from spanport_server.core.constants import (
     RESPONDER_ROLES,
     SAFE_METHODS,
     SESSION_COOKIE,
+    USER_RATE_KEY,
 )
 from spanport_server.core.errors import NotAllowedError
+from spanport_server.core.ids import UuidV7
+from spanport_server.core.rate_limiter import RateLimiter
+from spanport_server.core.request_limits import ApiLimits, limit_alert_test, limit_caller
 from spanport_server.repositories.clickhouse.endpoint_detail_repository import (
     EndpointDetailRepository,
 )
@@ -57,7 +63,7 @@ from spanport_server.services.error_service import ErrorService
 from spanport_server.services.log_export_service import LogExportService
 from spanport_server.services.log_ingest_service import LogIngestService
 from spanport_server.services.log_search_service import LogSearchService
-from spanport_server.services.log_tail_service import LogTailService
+from spanport_server.services.log_tail_service import CallerCheck, LogTailService
 from spanport_server.services.project_service import ProjectService
 from spanport_server.services.service_map_service import ServiceMapService
 from spanport_server.services.span_ingest_service import SpanIngestService
@@ -102,6 +108,7 @@ def get_auth_service(request: Request) -> AuthService:
         UserRepository(sessionmaker),
         SessionRepository(sessionmaker),
         login_limit=login_limit(request.app.state.settings),
+        session_max_age=timedelta(hours=request.app.state.settings.session_max_hours),
     )
 
 
@@ -172,18 +179,25 @@ def get_log_search_service(request: Request) -> LogSearchService:
 
 
 def get_log_export_service(request: Request) -> LogExportService:
-    """Build the log export service on the app's Postgres pool and ClickHouse client."""
+    """Build the log export service on Postgres, ClickHouse and the app's export slots."""
+    limits: ApiLimits = request.app.state.api_limits
     return LogExportService(
         TenantRepository(request.app.state.postgres_sessionmaker),
         LogSearchRepository(request.app.state.clickhouse_client),
+        request.app.state.stream_slots,
+        max_exports=limits.concurrent_exports,
     )
 
 
 def get_log_tail_service(request: Request) -> LogTailService:
-    """Build the live tail service on the app's Postgres pool and ClickHouse client."""
+    """Build the live tail service on Postgres, ClickHouse and the app's tail slots."""
+    limits: ApiLimits = request.app.state.api_limits
     return LogTailService(
         TenantRepository(request.app.state.postgres_sessionmaker),
         LogSearchRepository(request.app.state.clickhouse_client),
+        request.app.state.stream_slots,
+        max_tails=limits.concurrent_tails,
+        max_minutes=limits.tail_max_minutes,
     )
 
 
@@ -195,13 +209,26 @@ def get_project_service(request: Request) -> ProjectService:
     )
 
 
-def build_alert_notifier(settings: Settings) -> AlertNotifier:
-    """The alert emailer; without SMTP settings it reports that email isn't set up."""
-    return AlertNotifier(EmailClient(settings) if settings.smtp_host else None, settings.ui_url)
+def build_alert_notifier(settings: Settings, limiter: RateLimiter) -> AlertNotifier:
+    """The alert emailer; without SMTP settings it reports that email isn't set up.
+
+    Args:
+        settings: Mail server, UI address and the hourly email cap per organization.
+        limiter: The app's limiter, shared by every notifier so the hourly cap holds.
+    """
+    return AlertNotifier(
+        EmailClient(settings) if settings.smtp_host else None,
+        settings.ui_url,
+        limiter,
+        emails_per_hour=settings.alert_max_emails_per_hour,
+    )
 
 
 def build_alert_check_service(
-    sessionmaker: async_sessionmaker[AsyncSession], clickhouse: AsyncClient, settings: Settings
+    sessionmaker: async_sessionmaker[AsyncSession],
+    clickhouse: AsyncClient,
+    settings: Settings,
+    limiter: RateLimiter,
 ) -> AlertCheckService:
     """The service the alert check job runs, built once at start-up."""
     return AlertCheckService(
@@ -209,7 +236,7 @@ def build_alert_check_service(
         AlertEventRepository(sessionmaker),
         LogSearchRepository(clickhouse),
         TenantRepository(sessionmaker),
-        build_alert_notifier(settings),
+        build_alert_notifier(settings, limiter),
         timedelta(seconds=settings.alert_check_seconds),
     )
 
@@ -221,7 +248,7 @@ def get_alert_rule_service(request: Request) -> AlertRuleService:
     return AlertRuleService(
         AlertRuleRepository(sessionmaker),
         TenantRepository(sessionmaker),
-        build_alert_notifier(settings),
+        build_alert_notifier(settings, request.app.state.rate_limiter),
         alert_limits(settings),
     )
 
@@ -233,7 +260,7 @@ def get_alert_event_service(request: Request) -> AlertEventService:
         AlertEventRepository(sessionmaker),
         TenantRepository(sessionmaker),
         AlertAssigneeRepository(sessionmaker),
-        build_alert_notifier(request.app.state.settings),
+        build_alert_notifier(request.app.state.settings, request.app.state.rate_limiter),
     )
 
 
@@ -251,6 +278,7 @@ def bearer_token(authorization: str) -> str | None:
 
 
 async def require_data_key(
+    request: Request,
     auth_service: Annotated[ApiKeyAuthService, Depends(get_api_key_auth_service)],
     authorization: Annotated[str, Header()] = "",
 ) -> ApiKeyRecord:
@@ -261,14 +289,15 @@ async def require_data_key(
 
     Raises:
         InvalidKeyError: The header is missing or the key is not a valid data key.
+        RateLimitedError: Over the rate limit (only /api/v1 is counted, never OTLP ingest).
     """
-    return await auth_service.authenticate(bearer_token(authorization), KeyType.INGEST)
+    key = await auth_service.authenticate(bearer_token(authorization), KeyType.INGEST)
+    limit_caller(request, API_KEY_RATE_KEY.format(key_id=key.id))
+    return key
 
 
-async def require_user(
-    request: Request, auth_service: Annotated[AuthService, Depends(get_auth_service)]
-) -> UserRecord:
-    """The signed-in person, from the session cookie.
+async def authenticate_session(request: Request, auth_service: AuthService) -> UserRecord:
+    """The signed-in person, from the session cookie, without counting the request.
 
     Requests other than GET must also send the CSRF token from the CSRF cookie in a header.
 
@@ -281,6 +310,21 @@ async def require_user(
         request.headers.get(CSRF_HEADER),
         needs_csrf=request.method not in SAFE_METHODS,
     )
+
+
+async def require_user(
+    request: Request, auth_service: Annotated[AuthService, Depends(get_auth_service)]
+) -> UserRecord:
+    """The signed-in person, counted against their rate limit.
+
+    Raises:
+        NotSignedInError: No valid session (401).
+        CsrfError: The CSRF header is missing or wrong (403).
+        RateLimitedError: Over the rate limit (429).
+    """
+    user = await authenticate_session(request, auth_service)
+    limit_caller(request, USER_RATE_KEY.format(user_id=user.id))
+    return user
 
 
 async def require_manager(user: Annotated[UserRecord, Depends(require_user)]) -> Caller:
@@ -327,30 +371,78 @@ def user_caller(user: UserRecord) -> Caller:
     )
 
 
-def require_reader(scope: Scope) -> Callable[..., Awaitable[Caller]]:
-    """A dependency for data endpoints: an admin key holding `scope`, or else a signed-in person.
+async def authenticate_reader(
+    request: Request, key_service: ApiKeyAuthService, auth_service: AuthService, scope: Scope
+) -> tuple[Caller, str]:
+    """The admin key holding `scope`, or else the signed-in person, without counting the request.
 
     A request with an Authorization header is treated as a script and needs a valid admin key;
     without one, the browser's session cookie is checked. Every role may read.
-    Raises InvalidKeyError, MissingScopeError, NotSignedInError or CsrfError.
+
+    Returns:
+        The caller, and the key its requests are counted under.
+
+    Raises:
+        InvalidKeyError, MissingScopeError, NotSignedInError or CsrfError.
+    """
+    authorization = request.headers.get(AUTHORIZATION_HEADER, "")
+    if authorization:
+        key = await key_service.authenticate(
+            bearer_token(authorization), KeyType.ADMIN, required_scope=scope
+        )
+        caller = Caller(org_id=key.org_id, label=f"key=...{key.last_four}")
+        return caller, API_KEY_RATE_KEY.format(key_id=key.id)
+    user = await authenticate_session(request, auth_service)
+    return user_caller(user), USER_RATE_KEY.format(user_id=user.id)
+
+
+def require_reader(scope: Scope) -> Callable[..., Awaitable[Caller]]:
+    """A dependency for data endpoints: an admin key holding `scope`, or else a signed-in person,
+    counted against their rate limit.
+
+    Raises InvalidKeyError, MissingScopeError, NotSignedInError, CsrfError or RateLimitedError.
     """
 
     async def require(
         request: Request,
         key_service: Annotated[ApiKeyAuthService, Depends(get_api_key_auth_service)],
         auth_service: Annotated[AuthService, Depends(get_auth_service)],
-        authorization: Annotated[str, Header()] = "",
     ) -> Caller:
-        """Authenticate the admin key or the session for this scope."""
-        if authorization:
-            key = await key_service.authenticate(
-                bearer_token(authorization), KeyType.ADMIN, required_scope=scope
-            )
-            return Caller(org_id=key.org_id, label=f"key=...{key.last_four}")
-        return user_caller(await require_user(request, auth_service))
+        """Authenticate the admin key or the session for this scope, then count the request."""
+        caller, rate_key = await authenticate_reader(request, key_service, auth_service, scope)
+        limit_caller(request, rate_key)
+        return caller
 
     return require
 
 
 require_logs_reader = require_reader(Scope.LOGS_READ)
 require_projects_reader = require_reader(Scope.PROJECTS_READ)
+
+
+def get_logs_reader_check(
+    request: Request,
+    key_service: Annotated[ApiKeyAuthService, Depends(get_api_key_auth_service)],
+    auth_service: Annotated[AuthService, Depends(get_auth_service)],
+) -> CallerCheck:
+    """A function that authenticates this request's admin key or session again, without
+    counting it. Live tail calls it every minute while it streams.
+    """
+
+    async def check() -> Caller:
+        """The caller as they are now; raises if they may no longer read logs."""
+        caller, _ = await authenticate_reader(request, key_service, auth_service, Scope.LOGS_READ)
+        return caller
+
+    return check
+
+
+async def limit_alert_tests(
+    request: Request, rule_id: UuidV7, caller: Annotated[Caller, Depends(require_manager)]
+) -> None:
+    """Route dependency of the alert test: once a minute per rule, a daily cap per person.
+
+    Raises:
+        RateLimitedError: Tested too recently, or too many tests in the last day (429).
+    """
+    limit_alert_test(request, rule_id, caller.user_id)

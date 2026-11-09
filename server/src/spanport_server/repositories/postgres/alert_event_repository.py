@@ -11,7 +11,13 @@ from sqlalchemy.orm import aliased
 from spanport_server.core.ids import UuidV7, new_id
 from spanport_server.models import AlertEvent, AlertRule, User
 from spanport_server.repositories.postgres.alert_rule_repository import RULE_COLUMNS, to_rule_record
-from spanport_server.schemas.alert import AlertEventItem, AlertRuleRecord, AlertState, OpenAlert
+from spanport_server.schemas.alert import (
+    AlertEventItem,
+    AlertRuleRecord,
+    AlertState,
+    AssignOutcome,
+    OpenAlert,
+)
 
 OPEN_STATES = (AlertState.FIRING, AlertState.ACKNOWLEDGED)
 ASSIGNEE = aliased(User)
@@ -104,13 +110,36 @@ class AlertEventRepository:
             AlertEvent.recovered_at.is_not(None),
         )
 
-    async def assign(self, org_id: UuidV7, event_id: UuidV7, user_id: UuidV7) -> bool:
-        """Give an open alert to this person.
+    async def assign(self, org_id: UuidV7, event_id: UuidV7, user_id: UuidV7) -> AssignOutcome:
+        """Give an open alert to this person. The row is locked while it is read and changed,
+        so two people assigning at once each see who had it before them.
 
         Returns:
-            False when the organization has no open alert with this id.
+            ASSIGNED, UNCHANGED when it was already theirs, or NOT_FOUND when the organization
+            has no open alert with this id.
         """
-        return await self._update_open(org_id, event_id, {"assigned_to": user_id})
+        async with self._sessionmaker.begin() as session:
+            row = (
+                await session.execute(
+                    select(AlertEvent.assigned_to)
+                    .where(
+                        AlertEvent.org_id == org_id,
+                        AlertEvent.id == event_id,
+                        AlertEvent.state.in_(OPEN_STATES),
+                    )
+                    .with_for_update()
+                )
+            ).first()
+            if row is None:
+                return AssignOutcome.NOT_FOUND
+            if row.assigned_to == user_id:
+                return AssignOutcome.UNCHANGED
+            await session.execute(
+                update(AlertEvent)
+                .where(AlertEvent.org_id == org_id, AlertEvent.id == event_id)
+                .values(assigned_to=user_id)
+            )
+        return AssignOutcome.ASSIGNED
 
     async def acknowledge(
         self, org_id: UuidV7, event_id: UuidV7, user_id: UuidV7, now: datetime

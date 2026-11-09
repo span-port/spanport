@@ -59,6 +59,8 @@ export const REQUEST_ID_HEADER = "X-Request-ID";
 export const UNKNOWN_ERROR_CODE = "unknown";
 
 export const STATUS_UNAUTHORIZED = 401;
+// Rate limited: the same request works again after a wait.
+export const STATUS_TOO_MANY_REQUESTS = 429;
 // 4xx answers mean the request itself is wrong, so retrying it won't help.
 export const FIRST_CLIENT_ERROR_STATUS = 400;
 export const FIRST_SERVER_ERROR_STATUS = 500;

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -84,3 +85,25 @@ async def test_the_limit_and_window_come_from_settings(setup: Setup) -> None:
 
     # Failures at 12:00 and 12:01; the first leaves the 5-minute window at 12:05, it is now 12:02.
     assert locked.value.retry_after_seconds == 3 * 60
+
+
+async def test_parallel_guesses_cannot_all_slip_past_the_limit(setup: Setup) -> None:
+    attempts = [
+        setup.auth.login(LoginRequest(email="sam@example.com", password=f"guess number {n}"))
+        for n in range(12)
+    ]
+
+    outcomes = await asyncio.gather(*attempts, return_exceptions=True)
+
+    wrong = [o for o in outcomes if isinstance(o, InvalidLoginError)]
+    limited = [o for o in outcomes if isinstance(o, RateLimitedError)]
+    assert (len(wrong), len(limited)) == (5, 7)
+
+
+async def test_a_password_reset_lifts_the_lock(setup: Setup) -> None:
+    await setup.wrong(5)
+    new_password = "a brand new passphrase"
+
+    await setup.auth.reset_password("Sam@Example.com", new_password)
+
+    await setup.auth.login(LoginRequest(email="sam@example.com", password=new_password))

@@ -5,6 +5,7 @@ import httpx
 import pytest
 from fakes import SAMPLE_DATA_KEY, FakeApiKeyStore, FakeLogWriter
 from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceResponse
+from opentelemetry.proto.logs.v1.logs_pb2 import LogRecord
 from otlp_samples import make_record, make_request
 
 from spanport_server.dependencies import get_api_key_auth_service, get_log_ingest_service
@@ -114,8 +115,8 @@ async def test_rejects_a_body_over_10_mb(client: httpx.AsyncClient) -> None:
     assert response.json()["code"] == "payload_too_large"
 
 
-async def test_rejects_a_gzip_body_that_expands_past_50_mb(client: httpx.AsyncClient) -> None:
-    bomb = gzip.compress(b"\0" * (50 * 1024 * 1024 + 1))
+async def test_rejects_a_gzip_body_that_expands_past_10_mb(client: httpx.AsyncClient) -> None:
+    bomb = gzip.compress(b"\0" * (10 * 1024 * 1024 + 1))
     headers = {**PROTOBUF_HEADERS, "Content-Encoding": "gzip"}
 
     response = await client.post("/v1/logs", content=bomb, headers=headers)
@@ -148,3 +149,17 @@ async def test_unknown_routes_return_problem_json(client: httpx.AsyncClient) -> 
 
     assert response.status_code == 404
     assert response.json()["code"] == "not_found"
+
+
+async def test_rejects_a_small_gzip_body_of_too_many_empty_records(
+    client: httpx.AsyncClient, writer: FakeLogWriter
+) -> None:
+    payload = make_request(*[LogRecord() for _ in range(100_000)]).SerializeToString()
+    headers = {**PROTOBUF_HEADERS, "Content-Encoding": "gzip"}
+
+    response = await client.post("/v1/logs", content=gzip.compress(payload), headers=headers)
+
+    assert response.status_code == 413
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["code"] == "payload_too_large"
+    assert writer.rows == []

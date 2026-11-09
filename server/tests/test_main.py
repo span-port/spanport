@@ -1,6 +1,7 @@
 import pytest
 
 from spanport_server.core.config import DatabaseSettings, Settings, load_settings
+from spanport_server.repositories.clickhouse.database import read_limits
 
 REQUIRED_ENV = {
     "SPANPORT_LOG_LEVEL": "INFO",
@@ -68,3 +69,47 @@ def test_invalid_setting_is_named_without_echoing_its_value(full_env: pytest.Mon
     message = str(stopped.value.code)
     assert "SPANPORT_SERVER_PORT" in message
     assert "99999" not in message
+
+
+@pytest.mark.parametrize("variable", ["SPANPORT_POSTGRES_PASSWORD", "SPANPORT_CLICKHOUSE_PASSWORD"])
+def test_refuses_to_start_with_the_placeholder_password(
+    full_env: pytest.MonkeyPatch, variable: str
+) -> None:
+    full_env.setenv(variable, "change-me")
+
+    with pytest.raises(SystemExit) as stopped:
+        load_settings(DatabaseSettings)
+
+    message = str(stopped.value.code)
+    assert variable in message
+    assert "placeholder password" in message
+
+
+def test_read_limits_default_to_30_seconds_and_2_gib(full_env: pytest.MonkeyPatch) -> None:
+    settings = load_settings(DatabaseSettings)
+
+    assert read_limits(settings) == {
+        "max_execution_time": 30,
+        "max_memory_usage": 2 * 1024 * 1024 * 1024,
+    }
+
+
+def test_read_limits_come_from_the_environment(full_env: pytest.MonkeyPatch) -> None:
+    full_env.setenv("SPANPORT_CLICKHOUSE_MAX_EXECUTION_SECONDS", "5")
+    full_env.setenv("SPANPORT_CLICKHOUSE_MAX_MEMORY_BYTES", str(512 * 1024 * 1024))
+
+    settings = load_settings(DatabaseSettings)
+
+    assert read_limits(settings) == {
+        "max_execution_time": 5,
+        "max_memory_usage": 512 * 1024 * 1024,
+    }
+
+
+def test_a_read_limit_of_zero_would_mean_none_so_it_is_refused(
+    full_env: pytest.MonkeyPatch,
+) -> None:
+    full_env.setenv("SPANPORT_CLICKHOUSE_MAX_EXECUTION_SECONDS", "0")
+
+    with pytest.raises(SystemExit):
+        load_settings(DatabaseSettings)

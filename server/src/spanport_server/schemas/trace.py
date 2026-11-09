@@ -7,6 +7,8 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from spanport_server.core.constants import (
     DEFAULT_TRACE_SEARCH_LIMIT,
+    MAX_CURSOR_LENGTH,
+    MAX_MIN_DURATION_MS,
     MAX_ROUTE_FILTER_LENGTH,
     MAX_TRACE_SEARCH_LIMIT,
 )
@@ -24,10 +26,10 @@ class TraceSearchRequest(BaseModel):
     service: str = Field(default="", max_length=MAX_ROUTE_FILTER_LENGTH)
     # Part of the route or span name, e.g. "/users".
     route: str = Field(default="", max_length=MAX_ROUTE_FILTER_LENGTH)
-    min_duration_ms: int = Field(default=0, ge=0)
+    min_duration_ms: int = Field(default=0, ge=0, le=MAX_MIN_DURATION_MS)
     errors_only: bool = False
     limit: int = Field(default=DEFAULT_TRACE_SEARCH_LIMIT, ge=1, le=MAX_TRACE_SEARCH_LIMIT)
-    cursor: str | None = None
+    cursor: str | None = Field(default=None, max_length=MAX_CURSOR_LENGTH)
 
 
 class RequestItem(BaseModel):

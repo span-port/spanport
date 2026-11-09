@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
+from clickhouse_connect.driver.exceptions import DatabaseError
 from fastapi import FastAPI
 from starlette.requests import ClientDisconnect
 
@@ -26,6 +27,14 @@ def build_app() -> FastAPI:
     @app.get("/crash")
     async def crash() -> None:
         raise RuntimeError("database password is hunter2")
+
+    @app.get("/too-expensive")
+    async def too_expensive() -> None:
+        raise DatabaseError("Code: 159. TIMEOUT_EXCEEDED secret query text", code=159)
+
+    @app.get("/clickhouse-bug")
+    async def clickhouse_bug() -> None:
+        raise DatabaseError("Code: 62. SYNTAX_ERROR secret query text", code=62)
 
     @app.get("/cancelled")
     async def cancelled() -> None:
@@ -97,3 +106,24 @@ async def test_unknown_route_is_problem_json(client: httpx.AsyncClient) -> None:
     assert response.status_code == 404
     assert response.json()["code"] == "not_found"
     assert response.json()["request_id"] == response.headers["x-request-id"]
+
+
+async def test_a_query_stopped_by_the_read_limits_asks_to_narrow_it(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/too-expensive")
+
+    assert response.status_code == 400
+    assert response.headers["content-type"] == "application/problem+json"
+    body = response.json()
+    assert body["code"] == "query_too_expensive"
+    assert "Narrow the time range" in body["detail"]
+    assert "secret" not in response.text
+
+
+async def test_any_other_clickhouse_error_is_a_plain_500(client: httpx.AsyncClient) -> None:
+    response = await client.get("/clickhouse-bug")
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "internal_error"
+    assert "secret" not in response.text

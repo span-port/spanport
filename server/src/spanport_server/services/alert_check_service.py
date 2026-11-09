@@ -122,8 +122,17 @@ class AlertCheckService:
                 org_id, now, now + self.check_interval - ALERT_CHECK_EARLY, ALERT_CHECK_BATCH
             )
             for rule in due:
-                checked += await self._check_rule(rule, now)
+                checked += await self._check_rule_safely(rule, now)
         return checked
+
+    async def _check_rule_safely(self, rule: AlertRuleRecord, now: datetime) -> int:
+        """Check one rule; an unexpected failure is logged with the rule id and counts as
+        skipped, so one broken rule never stops the others in the round."""
+        try:
+            return await self._check_rule(rule, now)
+        except Exception:  # one rule's bug must not abort every other rule's check
+            logger.exception("alert check failed rule=%s project=%s", rule.id, rule.project_id)
+            return 0
 
     async def _check_rule(self, rule: AlertRuleRecord, now: datetime) -> int:
         """Check one rule; 1 if it was checked, 0 if it had to be skipped."""

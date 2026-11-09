@@ -23,6 +23,7 @@ def to_record(api_key: ApiKey) -> ApiKeyRecord:
         expires_at=api_key.expires_at,
         revoked_at=api_key.revoked_at,
         name=api_key.name,
+        created_by=api_key.created_by,
     )
 
 
@@ -101,6 +102,7 @@ class ApiKeyRepository:
         scopes: tuple[Scope, ...] = (),
         expires_at: datetime | None = None,
         name: str | None = None,
+        created_by: UuidV7 | None = None,
     ) -> ApiKeyRecord:
         """Store a new key.
 
@@ -113,6 +115,7 @@ class ApiKeyRepository:
             scopes: What an admin key may do.
             expires_at: When the key stops working; required for admin keys.
             name: What people call the key, e.g. "hr-portal-telemetry".
+            created_by: The signed-in user creating it; None from the CLI.
 
         Returns:
             The stored key.
@@ -127,6 +130,7 @@ class ApiKeyRepository:
             last_four=last_four,
             scopes=list(scopes),
             expires_at=expires_at,
+            created_by=created_by,
         )
         async with self._sessionmaker.begin() as session:
             session.add(api_key)

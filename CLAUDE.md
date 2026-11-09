@@ -121,7 +121,7 @@ SQLAlchemy models live in `server/src/spanport_server/models/`, separate from sc
 
 - Management API under `/api/v1/` with plural kebab-case nouns (`/api/v1/api-keys/{id}`). Breaking changes only in `/api/v2`.
 - Every list uses cursor pagination (`limit`, `cursor`, `next_cursor`, `has_more`).
-- Every endpoint has auth, a rate limit and the problem+json error format. A request ID travels through every service and appears in logs and errors.
+- Every endpoint has auth, a rate limit and the problem+json error format. Rate limits are in-process token buckets (`core/rate_limiter.py`, moves to `packages/core` with the gateway): per user or admin key on `/api/v1` (`SPANPORT_RATE_LIMIT_PER_MINUTE`, lower `_EXPENSIVE_PER_MINUTE` for searches, exports, APIs, errors, map and traces), per client address on setup, login and invites (`_PUBLIC_PER_MINUTE`; `X-Real-IP` trusted only from a private-network peer); 429 `rate_limited` with `Retry-After`. `/health` and OTLP ingest are not limited. Counts are per process. A request ID travels through every service and appears in logs and errors.
 - Telemetry ingest uses the standard OTLP paths (`/v1/logs`, `/v1/traces`, `/v1/metrics`).
 
 ## Data and security rules
@@ -151,7 +151,7 @@ SQLAlchemy models live in `server/src/spanport_server/models/`, separate from sc
   - The server checks the data key against Postgres, sets `org_id`/`project_id` from the key (never from the payload) and writes to ClickHouse in bounded batches. If ClickHouse is down, it returns `503` and the collector retries.
   - Apps may send OTLP/HTTP protobuf or JSON to the collector. The server accepts **protobuf only** (the collector always forwards protobuf), gzip-compressed or not. The collector caps batches at 1,000 records (`send_batch_max_size`).
   - gRPC: the collector accepts OTLP/gRPC on 4317 and OTLP/HTTP on 4318 from apps. The server stays HTTP-only; no `grpcio`.
-  - Check order on `/v1/logs`: key → content type → body size (10 MB) → bounded gzip decompression (50 MB) → protobuf decode. Unauthenticated requests never reach the parser.
+  - Check order on `/v1/logs`: key → content type → body size (10 MB) → bounded gzip decompression (10 MB) → record count read from the raw bytes (at most 5,000 records or spans, 413 otherwise) → protobuf decode in a worker thread. Unauthenticated requests never reach the parser; a malformed key is refused without a Postgres lookup. Out-of-range values (times, severity, status, duration, long names and paths) are clamped or cut; a value ClickHouse still refuses is a 400. Inserts go in chunks of 1,000 rows.
 - **Python SDK (`sdk/python`, PyPI name `spanport`):**
   - Supports Python 3.12+ (it runs inside users' apps, so it can't require our server's 3.14).
   - Standard `src/` layout: public API in `src/spanport/__init__.py` (`init`, `shutdown`); internal modules start with `_`; constants in `_constants.py`. The controller/service/repository layering applies to the gateway and server, not to SDKs.
@@ -217,6 +217,16 @@ SQLAlchemy models live in `server/src/spanport_server/models/`, separate from sc
   - Paging is exact: each log row has a UUIDv7 `log_id` set at ingest; pages continue after `(ts, log_id)` via an opaque cursor.
   - Admin keys: `project_id` is NULL, `scopes` and `expires_at` set; DB checks tie these to the key type (migration 0002). A valid key without the scope gets 403 `insufficient_scope`, every other key failure 401.
   - Validation errors list field names and reasons only (`errors(include_input=False)`); search log lines record counts and flags, never the query text.
+- **Security hardening (after the review of 2026-11-09):**
+  - Server port 8000 is published on `127.0.0.1` only; apps reach `/api` through the UI's nginx. Start-up refuses the `change-me` database passwords. FastAPI docs are off unless `SPANPORT_API_DOCS=true`.
+  - ClickHouse reads are capped by `SPANPORT_CLICKHOUSE_MAX_EXECUTION_SECONDS` (30) and `_MAX_MEMORY_BYTES` (2 GiB); hitting one is 400 `query_too_expensive`.
+  - Collector: `memory_limiter` first, 10 MiB per request, `metadata_cardinality_limit` 200, and a `routing` connector that drops requests without `Bearer sp_ingest_`. Optional TLS: `collector/config.tls.yaml` as a second `--config` with a mounted certificate.
+  - Argon2 runs in a 4-thread pool, never on the event loop; setup and invite tokens are checked before hashing. Login attempts are serialized per email with an advisory lock and recorded before the password check; `reset-password` clears the lock. Sessions also end `SPANPORT_SESSION_MAX_HOURS` (168) after sign-in. Setup runs one at a time and a new setup token ends older ones. A role that changed meanwhile answers 409.
+  - Removing or demoting an owner or admin cancels the invites they sent and revokes the admin keys they created (`api_keys.created_by`, migration 0011). An email with an account in another org gets the generic 409 "This email can't be invited." Assignee emails are shown to owners and admins only.
+  - Live tail re-checks the caller every 60 s, ends after `SPANPORT_TAIL_MAX_MINUTES` (60) and allows `SPANPORT_RATE_LIMIT_CONCURRENT_TAILS` (3) per caller (the UI reconnects, also after 429). One export at a time per caller (`_CONCURRENT_EXPORTS`). Ranges may end at most 1 hour from now; cursors are at most 256 characters and their time must be inside the range. CSV export also guards cells starting with `|` or a newline, after leading spaces.
+  - Alert email: the SMTP certificate is verified, each recipient gets their own message, addresses reject `, ; < > ( ) [ ] " \` and whitespace, rule names and queries reject control characters, and a failing rule is logged and skipped without stopping the round. Send test: once a minute per rule and `SPANPORT_RATE_LIMIT_ALERT_TESTS_PER_DAY` (20) per person; at most `SPANPORT_ALERT_MAX_EMAILS_PER_HOUR` (100) alert emails per org. Assigning emails only when the assignee changes.
+  - UI: nginx sends CSP (no `unsafe-inline`), `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy: no-referrer` and `server_tokens off`, and passes `X-Real-IP`. Invite links are `/accept-invite#token=...` (old `?token=` links still work) so tokens stay out of server logs. Sign in, Setup and Accept invite say "Spanport needs HTTPS" over plain http to a non-local host.
+  - SDKs (Python 1.0.1, Node 1.0.2, not yet published): without `server_url`/`serverUrl` the start-up key check runs only when the collector is local, otherwise it is skipped with a note to set it to the UI's URL; a warning when a key would cross plain http to another host; Node `logStream` caps an unfinished line at 1 MB and catches its own errors.
 
 ## License
 

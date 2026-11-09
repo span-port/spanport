@@ -5,6 +5,7 @@ import httpx
 import pytest
 from fakes import SAMPLE_DATA_KEY, FakeApiKeyStore, FakeSpanWriter
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
+from opentelemetry.proto.trace.v1.trace_pb2 import Span
 from otlp_samples import make_span, make_trace_request
 
 from spanport_server.dependencies import get_api_key_auth_service, get_span_ingest_service
@@ -84,3 +85,16 @@ async def test_storage_down_is_a_503_so_the_collector_retries() -> None:
         response = await client.post("/v1/traces", content=VALID_PAYLOAD, headers=PROTOBUF_HEADERS)
 
     assert response.status_code == 503
+
+
+async def test_too_many_spans_are_refused_with_413(
+    client: httpx.AsyncClient, writer: FakeSpanWriter
+) -> None:
+    payload = make_trace_request(*[Span() for _ in range(5_001)]).SerializeToString()
+    headers = {**PROTOBUF_HEADERS, "Content-Encoding": "gzip"}
+
+    response = await client.post("/v1/traces", content=gzip.compress(payload), headers=headers)
+
+    assert response.status_code == 413
+    assert response.json()["code"] == "payload_too_large"
+    assert writer.rows == []

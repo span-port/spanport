@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { canChangeUser, canLimitProjects, inviteLink, projectAccessLabel, roleLabel, rolesYouCanGive } from "./team";
+import {
+  canChangeUser,
+  canLimitProjects,
+  inviteLink,
+  inviteTokenFrom,
+  projectAccessLabel,
+  roleLabel,
+  rolesYouCanGive,
+} from "./team";
 
 describe("team helpers", () => {
   it("names roles", () => {
@@ -36,9 +44,16 @@ describe("team helpers", () => {
     );
   });
 
-  it("builds the invite link on the UI's own address", () => {
+  it("builds the invite link on the UI's own address, with the token in the fragment", () => {
     expect(inviteLink("https://spanport.acme.com", "a/b+c")).toBe(
-      "https://spanport.acme.com/accept-invite?token=a%2Fb%2Bc",
+      "https://spanport.acme.com/accept-invite#token=a%2Fb%2Bc",
     );
+  });
+
+  it("reads the invite token from the fragment, or from the query of older links", () => {
+    expect(inviteTokenFrom("#token=a%2Fb%2Bc", "")).toBe("a/b+c");
+    expect(inviteTokenFrom("", "?token=old")).toBe("old");
+    expect(inviteTokenFrom("#token=new", "?token=old")).toBe("new");
+    expect(inviteTokenFrom("", "")).toBeNull();
   });
 });

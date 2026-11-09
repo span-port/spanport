@@ -20,6 +20,7 @@ from spanport_server.schemas.log_search import (
 )
 from spanport_server.services.log_cursor import decode_cursor, encode_cursor
 from spanport_server.services.log_query_parser import build_condition
+from spanport_server.services.time_range import checked_range
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ class LogSearchService:
         """
         started = time.perf_counter()
         query = await self._bounded_query(caller, request)
-        after = decode_cursor(request.cursor) if request.cursor else None
+        after = decode_cursor(request.cursor, query.start, query.end) if request.cursor else None
         # One extra row tells whether another page exists.
         rows = await self._logs.search(query, after, request.limit + 1)
         page = rows[: request.limit]
@@ -132,17 +133,15 @@ async def bounded_query(
 
     Raises:
         NotFoundError: The project isn't in the caller's organization, or they may not see it.
-        InvalidRequestError: Bad range (backwards, or older than 7 days) or query.
+        InvalidRequestError: Bad range (backwards, older than 7 days, ending more than an hour
+            ahead, or out of the calendar) or query.
     """
     # A project the caller may not see answers like one that doesn't exist.
     if not caller.can_see(request.project_id) or not await projects.project_exists(
         caller.org_id, request.project_id
     ):
         raise NotFoundError("No project with this id in your organization.")
-    start = request.start.astimezone(UTC)
-    end = request.end.astimezone(UTC)
-    if end <= start:
-        raise InvalidRequestError("end must be after start.")
+    start, end = checked_range(request.start, request.end)
     if start < datetime.now(UTC) - LOG_RETENTION:
         raise InvalidRequestError("start must be within the last 7 days; older logs are gone.")
     return LogQuery(

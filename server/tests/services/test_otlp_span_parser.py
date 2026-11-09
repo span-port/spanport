@@ -4,12 +4,14 @@ import pytest
 from opentelemetry.proto.trace.v1.trace_pb2 import Span, Status
 from otlp_samples import make_span, make_trace_request
 
-from spanport_server.core.errors import InvalidRequestError
+from spanport_server.core.errors import InvalidRequestError, PayloadTooLargeError
 from spanport_server.core.ids import new_id
 from spanport_server.schemas.tenant import ProjectRef
 from spanport_server.services.otlp_span_parser import (
+    build_span_rows,
     decode_traces_request,
     drop_expired_spans,
+    http_status,
     route_from_path,
     span_category,
     to_span_rows,
@@ -132,3 +134,47 @@ def test_spans_older_than_30_days_are_dropped() -> None:
 def test_garbage_is_a_clear_error() -> None:
     with pytest.raises(InvalidRequestError, match="traces"):
         decode_traces_request(b"not protobuf \xff\xff")
+
+
+@pytest.mark.parametrize(
+    ("value", "status"),
+    [("404", 404), ("999", 999), ("1000", 0), ("٤٠٤", 0), ("²", 0), ("", 0)],
+    ids=["normal", "three-digits", "four-digits", "arabic-digits", "superscript", "absent"],
+)
+def test_http_status_takes_only_up_to_three_ascii_digits(value: str, status: int) -> None:
+    assert http_status({"http.response.status_code": value}) == status
+
+
+def test_a_span_longer_than_a_day_is_stored_as_one_day() -> None:
+    span = make_span()
+    span.end_time_unix_nano = 2**64 - 1
+
+    row = parse_one(span)
+
+    assert row["duration_ns"] == 24 * 3600 * 1_000_000_000
+    assert row["end_ts"] == row["start_ts"] + timedelta(days=1)  # type: ignore[operator]
+
+
+def test_a_span_that_ends_before_it_starts_takes_no_time() -> None:
+    span = make_span()
+    span.end_time_unix_nano = span.start_time_unix_nano - 1
+
+    assert parse_one(span)["duration_ns"] == 0
+
+
+def test_long_names_methods_and_paths_are_cut() -> None:
+    long_path = "/v" * 3_000
+    row = parse_one(
+        make_span(name="n" * 5_000, attributes={"http.method": "x" * 100, "url.path": long_path})
+    )
+
+    assert row["name"] == "n" * 1_000
+    assert row["http_method"] == "X" * 16
+    assert len(str(row["http_route"])) == 2_048
+
+
+def test_build_span_rows_refuses_more_than_5000_spans() -> None:
+    payload = make_trace_request(*[Span() for _ in range(5_001)]).SerializeToString()
+
+    with pytest.raises(PayloadTooLargeError):
+        build_span_rows(payload, PROJECT, NOW)

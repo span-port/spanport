@@ -7,12 +7,15 @@ from spanport_server.core.errors import (
     CsrfError,
     InvalidLoginError,
     InvalidRequestError,
+    InviteLinkError,
     NotFoundError,
     NotSignedInError,
     SetupLinkError,
 )
 from spanport_server.core.passwords import hash_password
 from spanport_server.schemas.auth import LoginRequest, Role, SetupRequest, SignedIn
+from spanport_server.schemas.team import AcceptInviteRequest
+from spanport_server.services import auth_service as auth_service_module
 from spanport_server.services.auth_service import AuthService
 
 pytestmark = pytest.mark.anyio
@@ -187,3 +190,47 @@ async def test_password_reset_changes_the_password_and_signs_out_everywhere() ->
         await service.reset_password("nobody@example.com", new_password)
     with pytest.raises(InvalidRequestError):
         await service.reset_password("owner@example.com", "short")
+
+
+async def test_a_session_ends_at_its_maximum_age_however_active() -> None:
+    users, sessions, clock = FakeUserStore(), FakeSessionStore(), Clock()
+    service = AuthService(users, sessions, now=clock, session_max_age=timedelta(hours=20))
+    users.add_user("sam@example.com", hash_password(PASSWORD), Role.OWNER)
+    signed_in = await service.login(LoginRequest(email="sam@example.com", password=PASSWORD))
+
+    for _ in range(2):
+        clock.now += timedelta(hours=7)
+        await service.authenticate(signed_in.session_token, None, needs_csrf=False)
+    clock.now += timedelta(hours=7)
+
+    with pytest.raises(NotSignedInError):
+        await service.authenticate(signed_in.session_token, None, needs_csrf=False)
+
+
+async def test_a_new_setup_token_ends_the_earlier_ones() -> None:
+    service, users, _, _ = make_service()
+    first = await new_token(service)
+    second = await new_token(service)
+
+    with pytest.raises(SetupLinkError):
+        await service.complete_setup(setup_form(first))
+    await service.complete_setup(setup_form(second))
+    assert await users.count_users() == 1
+
+
+async def test_made_up_setup_and_invite_tokens_never_reach_the_password_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def no_hashing(password: str) -> str:
+        raise AssertionError("the password was hashed before the token was checked")
+
+    monkeypatch.setattr(auth_service_module, "hash_password_in_thread", no_hashing)
+    service, _, _, _ = make_service()
+    await new_token(service)
+
+    with pytest.raises(SetupLinkError):
+        await service.complete_setup(setup_form("made-up-token"))
+    with pytest.raises(InviteLinkError):
+        await service.accept_invite(
+            AcceptInviteRequest(token="made-up-link", name="New", password=PASSWORD)
+        )

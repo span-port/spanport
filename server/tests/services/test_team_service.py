@@ -1,8 +1,9 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fakes import FakeSessionStore, FakeTeamStore, FakeUserStore
+from fakes import FakeApiKeyStore, FakeSessionStore, FakeTeamStore, FakeUserStore
 
+from spanport_server.core.constants import ACCOUNT_EXISTS_DETAIL, NOT_INVITABLE_DETAIL
 from spanport_server.core.errors import (
     ConflictError,
     InvalidRequestError,
@@ -10,8 +11,10 @@ from spanport_server.core.errors import (
     NotAllowedError,
     NotFoundError,
 )
+from spanport_server.schemas.api_key import CreateKeyRequest, KeyType, Scope
 from spanport_server.schemas.auth import Caller, Role, UserRecord
 from spanport_server.schemas.team import AcceptInviteRequest, InviteRequest
+from spanport_server.services.api_key_service import ApiKeyService
 from spanport_server.services.auth_service import AuthService
 from spanport_server.services.team_service import TeamService
 
@@ -32,7 +35,9 @@ class Team:
         self.admin = self.users.add_user(
             "admin@example.com", "hash", Role.ADMIN, org_id=self.owner.org_id
         )
-        self.team = TeamService(FakeTeamStore(self.users), self.sessions, lambda: self.now)
+        self.keys = FakeApiKeyStore()
+        self.store = FakeTeamStore(self.users, keys=self.keys)
+        self.team = TeamService(self.store, self.sessions, lambda: self.now)
         self.auth = AuthService(self.users, self.sessions, lambda: self.now)
 
     def caller(self, user: UserRecord) -> Caller:
@@ -158,3 +163,93 @@ async def test_another_org_cannot_touch_these_users(team: Team) -> None:
 
     with pytest.raises(NotFoundError):
         await team.team.remove_user(team.caller(stranger), team.admin.id)
+
+
+async def make_keys(team: Team, by: UserRecord) -> None:
+    """An admin key and a data key created by `by` in the UI."""
+    keys = ApiKeyService(team.store.tenants, team.keys)
+    team.store.tenants.org_ids["acme"] = by.org_id
+    project = await team.store.tenants.get_or_create_project("acme", "web", "shop", "production")
+    await keys.create_key(
+        team.caller(by),
+        CreateKeyRequest(name="ci", key_type=KeyType.ADMIN, scopes=[Scope.LOGS_READ]),
+    )
+    await keys.create_key(
+        team.caller(by),
+        CreateKeyRequest(name="app", key_type=KeyType.INGEST, project_id=project.project_id),
+    )
+
+
+def revoked_types(team: Team) -> dict[KeyType, bool]:
+    return {
+        record.key_type: record.revoked_at is not None
+        for record in team.keys.records_by_hash.values()
+    }
+
+
+async def test_removing_a_user_cancels_their_invites_and_admin_keys(
+    team: Team, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("INFO")
+    token = await team.invite("new@example.com", by=team.admin)
+    owners_token = await team.invite("other@example.com")
+    await make_keys(team, team.admin)
+
+    await team.team.remove_user(team.caller(team.owner), team.admin.id)
+
+    with pytest.raises(InviteLinkError):
+        await team.auth.inspect_invite(token)
+    assert (await team.auth.inspect_invite(owners_token)).email == "other@example.com"
+    assert revoked_types(team) == {KeyType.ADMIN: True, KeyType.INGEST: False}
+    assert "invites_cancelled=1 keys_revoked=1" in caplog.text
+
+
+async def test_demoting_an_admin_takes_back_their_invites_and_admin_keys(team: Team) -> None:
+    token = await team.invite("new@example.com", by=team.admin)
+    await make_keys(team, team.admin)
+
+    await team.team.change_role(team.caller(team.owner), team.admin.id, Role.MEMBER)
+
+    with pytest.raises(InviteLinkError):
+        await team.auth.inspect_invite(token)
+    assert revoked_types(team)[KeyType.ADMIN] is True
+
+
+async def test_promoting_an_admin_keeps_their_invites_and_keys(team: Team) -> None:
+    token = await team.invite("new@example.com", by=team.admin)
+    await make_keys(team, team.admin)
+
+    await team.team.change_role(team.caller(team.owner), team.admin.id, Role.OWNER)
+
+    assert (await team.auth.inspect_invite(token)).email == "new@example.com"
+    assert revoked_types(team) == {KeyType.ADMIN: False, KeyType.INGEST: False}
+
+
+async def test_a_role_that_changed_meanwhile_is_not_overwritten(team: Team) -> None:
+    member = team.users.add_user("m@example.com", "hash", Role.MEMBER, org_id=team.owner.org_id)
+    # An owner made them an owner after the admin's page was loaded.
+    team.store.role_changed_meanwhile = Role.OWNER
+
+    with pytest.raises(ConflictError, match="changed meanwhile"):
+        await team.team.change_role(team.caller(team.admin), member.id, Role.VIEWER)
+    assert team.users.users[member.id][0].role is Role.OWNER
+
+    # Now an owner removes them, but meanwhile someone made them a viewer.
+    team.store.role_changed_meanwhile = Role.VIEWER
+    with pytest.raises(ConflictError, match="changed meanwhile"):
+        await team.team.remove_user(team.caller(team.owner), member.id)
+    assert member.id not in team.users.disabled
+
+
+async def test_an_account_elsewhere_is_refused_without_saying_it_exists(team: Team) -> None:
+    team.users.add_user("someone@elsewhere.com", "hash", Role.OWNER)
+
+    with pytest.raises(ConflictError) as elsewhere:
+        await team.invite("someone@elsewhere.com")
+    with pytest.raises(ConflictError) as here:
+        await team.invite("admin@example.com")
+
+    assert elsewhere.value.detail == NOT_INVITABLE_DETAIL
+    assert "account" not in elsewhere.value.detail
+    assert here.value.detail == ACCOUNT_EXISTS_DETAIL
+    assert elsewhere.value.code == here.value.code

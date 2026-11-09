@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 
 import { trace } from "@opentelemetry/api";
 
+import { MAX_PARTIAL_LINE_LENGTH } from "../src/constants.js";
 import { createLogStream, parseLogLine } from "../src/logStream.js";
 import { type LogEntry } from "../src/pipeline.js";
+import { captureStderr } from "./helpers.js";
 
 const TRACE_ID = "0af7651916cd43dd8448eb211c80319c";
 const SPAN_ID = "b7ad6b7169203331";
@@ -70,5 +72,39 @@ describe("createLogStream", () => {
       entries.map((entry) => entry.body),
       ["first", "second"],
     );
+  });
+
+  it("cuts a line that never ends instead of keeping it all in memory", async () => {
+    const stderr = captureStderr();
+    const entries: LogEntry[] = [];
+    const stream = createLogStream((entry) => entries.push(entry));
+
+    stream.write("x".repeat(MAX_PARTIAL_LINE_LENGTH + 10));
+    stream.write('more"}\n{"msg":"next"}\n');
+    await new Promise<void>((resolve) => stream.end(resolve));
+    mock.restoreAll();
+
+    assert.equal(entries[0]?.body.length, MAX_PARTIAL_LINE_LENGTH);
+    assert.equal(entries.at(-1)?.body, "next");
+    assert.match(stderr(), /was cut/);
+  });
+
+  it("never lets an error while handling a line reach the app", async () => {
+    const stderr = captureStderr();
+    const entries: LogEntry[] = [];
+    const stream = createLogStream((entry) => {
+      if (entry.body === "boom") throw new Error("exporter broke");
+      entries.push(entry);
+    });
+
+    stream.write('{"msg":"boom"}\n{"msg":"after"}\n');
+    await new Promise<void>((resolve) => stream.end(resolve));
+    mock.restoreAll();
+
+    assert.deepEqual(
+      entries.map((entry) => entry.body),
+      ["after"],
+    );
+    assert.match(stderr(), /could not be sent: exporter broke/);
   });
 });

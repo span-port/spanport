@@ -17,10 +17,15 @@ from spanport_server.core.constants import (
     HTTP_STATUS_ATTRIBUTES,
     ID_SEGMENT_PATTERN,
     INCOMING_SPAN_KINDS,
+    MAX_HTTP_METHOD_LENGTH,
+    MAX_HTTP_STATUS_DIGITS,
+    MAX_SPAN_DURATION,
+    MAX_SPAN_NAME_LENGTH,
+    MAX_URL_PATH_LENGTH,
     NANOS_PER_MICROSECOND,
+    NANOS_PER_SECOND,
     OUTGOING_SPAN_KINDS,
     ROUTE_ID_PLACEHOLDER,
-    SERVICE_NAME_ATTRIBUTE,
     SPAN_CATEGORY_CLIENT,
     SPAN_CATEGORY_CODE,
     SPAN_CATEGORY_DB,
@@ -31,7 +36,6 @@ from spanport_server.core.constants import (
     SPAN_RETENTION,
     SPAN_STATUS_UNSET,
     STATUS_CODE_PREFIX,
-    UNKNOWN_SERVICE_NAME,
     URL_PATH_ATTRIBUTES,
     URL_PATH_SEPARATOR,
     URL_QUERY_SEPARATOR,
@@ -39,7 +43,10 @@ from spanport_server.core.constants import (
 from spanport_server.core.errors import InvalidRequestError
 from spanport_server.schemas.span_row import SpanRow
 from spanport_server.schemas.tenant import ProjectRef
-from spanport_server.services.otlp_log_parser import attributes_to_dict, event_time
+from spanport_server.services.otlp_log_parser import attributes_to_dict, event_time, service_name
+from spanport_server.services.otlp_record_count import check_record_count
+
+MAX_SPAN_DURATION_NS = int(MAX_SPAN_DURATION.total_seconds()) * NANOS_PER_SECOND
 
 
 def decode_traces_request(payload: bytes) -> ExportTraceServiceRequest:
@@ -56,6 +63,19 @@ def decode_traces_request(payload: bytes) -> ExportTraceServiceRequest:
     return request
 
 
+def build_span_rows(payload: bytes, project: ProjectRef, received_at: datetime) -> list[SpanRow]:
+    """Check the span count, decode the request and flatten it into rows.
+
+    CPU-bound: the ingest service runs it in a worker thread.
+
+    Raises:
+        PayloadTooLargeError: More than MAX_INGEST_RECORDS spans.
+        InvalidRequestError: Not a valid OTLP traces request.
+    """
+    check_record_count(payload)
+    return to_span_rows(decode_traces_request(payload), project, received_at)
+
+
 def to_span_rows(
     request: ExportTraceServiceRequest, project: ProjectRef, received_at: datetime
 ) -> list[SpanRow]:
@@ -69,7 +89,7 @@ def to_span_rows(
     rows: list[SpanRow] = []
     for resource_spans in request.resource_spans:
         resource_attributes = attributes_to_dict(resource_spans.resource.attributes)
-        service = resource_attributes.get(SERVICE_NAME_ATTRIBUTE, UNKNOWN_SERVICE_NAME)
+        service = service_name(resource_attributes)
         for scope_spans in resource_spans.scope_spans:
             for span in scope_spans.spans:
                 rows.append(to_span_row(span, project, service, resource_attributes, received_at))
@@ -87,7 +107,7 @@ def to_span_row(
     attributes = attributes_to_dict(span.attributes)
     kind = kind_name(span.kind)
     start_ts = event_time(span.start_time_unix_nano, received_at, received_at)
-    duration_ns = max(0, span.end_time_unix_nano - span.start_time_unix_nano)
+    duration_ns = span_duration_ns(span.start_time_unix_nano, span.end_time_unix_nano)
     return SpanRow(
         org_id=project.org_id,
         project_id=project.project_id,
@@ -95,7 +115,7 @@ def to_span_row(
         span_id=span.span_id.hex(),
         parent_span_id=span.parent_span_id.hex(),
         service=service,
-        name=span.name,
+        name=span.name[:MAX_SPAN_NAME_LENGTH],
         kind=kind,
         category=span_category(kind, attributes),
         start_ts=start_ts,
@@ -103,12 +123,20 @@ def to_span_row(
         duration_ns=duration_ns,
         status_code=status_name(span.status.code),
         status_message=span.status.message,
-        http_method=first_of(attributes, HTTP_METHOD_ATTRIBUTES).upper(),
+        http_method=first_of(attributes, HTTP_METHOD_ATTRIBUTES)[:MAX_HTTP_METHOD_LENGTH].upper(),
         http_route=http_route(attributes),
         http_status=http_status(attributes),
         attributes=attributes,
         resource_attributes=resource_attributes,
     )
+
+
+def span_duration_ns(start_unix_nano: int, end_unix_nano: int) -> int:
+    """How long the span took, from 0 (ended before it started) to MAX_SPAN_DURATION.
+
+    A longer span means a wrong clock; capping it keeps its end inside what storage can hold.
+    """
+    return min(max(0, end_unix_nano - start_unix_nano), MAX_SPAN_DURATION_NS)
 
 
 def span_category(kind: str, attributes: dict[str, str]) -> str:
@@ -152,7 +180,8 @@ def http_route(attributes: dict[str, str]) -> str:
     route = first_of(attributes, HTTP_ROUTE_ATTRIBUTES)
     if route:
         return route
-    path = first_of(attributes, URL_PATH_ATTRIBUTES).split(URL_QUERY_SEPARATOR, 1)[0]
+    path = first_of(attributes, URL_PATH_ATTRIBUTES)[:MAX_URL_PATH_LENGTH]
+    path = path.split(URL_QUERY_SEPARATOR, 1)[0]
     return route_from_path(path)
 
 
@@ -168,9 +197,14 @@ def route_from_path(path: str) -> str:
 
 
 def http_status(attributes: dict[str, str]) -> int:
-    """The HTTP status code as a number, or 0 when absent or not a number."""
+    """The HTTP status code as a number (0 to 999), or 0 when absent or not one.
+
+    Only ASCII digits count: str.isdigit() also accepts other scripts' digits and superscripts.
+    """
     value = first_of(attributes, HTTP_STATUS_ATTRIBUTES)
-    return int(value) if value.isdigit() else 0
+    if len(value) > MAX_HTTP_STATUS_DIGITS or not (value.isascii() and value.isdigit()):
+        return 0
+    return int(value)
 
 
 def drop_expired_spans(rows: list[SpanRow], received_at: datetime) -> list[SpanRow]:

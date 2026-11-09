@@ -95,3 +95,35 @@ async def test_rejection_log_shows_only_the_last_four_characters(
 
     assert "...a1b2" in caplog.text
     assert SAMPLE_DATA_KEY not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "raw_key",
+    [
+        "sp_ingest_short",
+        "sp_ingest_" + "a" * 44,
+        "sp_ingest_" + "a" * 42 + "!",
+        "sp_ingest_" + "a" * 100_000,
+    ],
+    ids=["too-short", "too-long", "bad-character", "huge"],
+)
+async def test_a_key_that_cant_have_been_issued_never_reaches_the_database(
+    raw_key: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = FakeApiKeyStore()
+
+    with pytest.raises(InvalidKeyError):
+        await ApiKeyAuthService(store).authenticate(raw_key, KeyType.INGEST)
+
+    assert store.lookups == 0
+    assert len(caplog.records) == 1
+    assert "key rejected: malformed" in caplog.text
+
+
+async def test_a_well_formed_unknown_key_is_looked_up_once() -> None:
+    store = FakeApiKeyStore()
+
+    with pytest.raises(InvalidKeyError):
+        await ApiKeyAuthService(store).authenticate("sp_ingest_" + "a" * 43, KeyType.INGEST)
+
+    assert store.lookups == 1

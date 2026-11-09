@@ -80,8 +80,10 @@ services:
       context: .
       dockerfile: server/Dockerfile
     <<: *server-settings
+    # Only this machine reaches the server directly; browsers go through the UI's nginx and apps
+    # send telemetry to the collector.
     ports:
-      - "${SPANPORT_SERVER_PORT}:${SPANPORT_SERVER_PORT}"
+      - "127.0.0.1:${SPANPORT_SERVER_PORT}:${SPANPORT_SERVER_PORT}"
     depends_on:
       migrate:
         condition: service_completed_successfully

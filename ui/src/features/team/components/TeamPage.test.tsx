@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AcceptInvitePage } from "../../auth";
@@ -57,11 +57,22 @@ function server(answer: (path: string, init: RequestInit) => Response | undefine
   return fetchMock;
 }
 
+// Shows the address the router is on, with any query and fragment.
+function LocationSpy() {
+  const location = useLocation();
+  return <output data-testid="location">{`${location.pathname}${location.search}${location.hash}`}</output>;
+}
+
+const currentLocation = () => screen.getByTestId("location").textContent;
+
 function renderAt(url: string, element: ReactNode) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[url]}>{element}</MemoryRouter>
+      <MemoryRouter initialEntries={[url]}>
+        {element}
+        <LocationSpy />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -96,7 +107,7 @@ describe("Users", () => {
       all_projects: false,
       project_ids: ["p2"],
     });
-    expect((await screen.findByText(/accept-invite\?token=tok%2F1$/)).textContent).toContain(window.location.origin);
+    expect((await screen.findByText(/accept-invite#token=tok%2F1$/)).textContent).toContain(window.location.origin);
 
     await userEvent.click(await screen.findByRole("button", { name: "Cancel invite" }));
     await userEvent.click(screen.getByRole("button", { name: "Click again to cancel" }));
@@ -142,9 +153,10 @@ describe("Accept invite", () => {
       if (path === "/api/v1/invites/accept") return json({ ...OWNER, email: "new@x.com", role: "viewer" }, 201);
       return undefined;
     });
-    renderAt("/accept-invite?token=tok", <AcceptInvitePage />);
+    renderAt("/accept-invite#token=tok", <AcceptInvitePage />);
 
     expect(await screen.findByText("Join acme on Spanport")).toBeDefined();
+    expect(currentLocation()).toBe("/accept-invite");
     expect(callTo(fetchMock, "POST", "/api/v1/invites/accept")).toBeUndefined();
     await userEvent.type(screen.getByLabelText("Your name"), "New Person");
     await userEvent.type(screen.getByLabelText("Password"), "a long enough passphrase");
@@ -155,6 +167,21 @@ describe("Accept invite", () => {
       name: "New Person",
       password: "a long enough passphrase",
     });
+  });
+
+  it("still accepts an older link with the token in the query, then clears it", async () => {
+    const fetchMock = server((path) =>
+      path === "/api/v1/invites/inspect"
+        ? json({ email: "new@x.com", role: "viewer", organization: "acme", invited_by: "Sam" })
+        : undefined,
+    );
+    renderAt("/accept-invite?token=old", <AcceptInvitePage />);
+
+    expect(await screen.findByText("Join acme on Spanport")).toBeDefined();
+    expect(JSON.parse(callTo(fetchMock, "POST", "/api/v1/invites/inspect")?.[1].body as string)).toEqual({
+      token: "old",
+    });
+    expect(currentLocation()).toBe("/accept-invite");
   });
 
   it("says when the link is incomplete", () => {

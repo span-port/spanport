@@ -4,6 +4,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from http import HTTPStatus
 
+from clickhouse_connect.driver.exceptions import DatabaseError as ClickHouseDatabaseError
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -11,13 +12,20 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import ClientDisconnect
 
 from spanport_server.core.constants import (
+    CLICKHOUSE_LIMIT_ERROR_CODES,
     CLIENT_CLOSED_REQUEST_STATUS,
     PROBLEM_CONTENT_TYPE,
     PROBLEM_TYPE_DEFAULT,
+    QUERY_TOO_EXPENSIVE_DETAIL,
     REQUEST_ID_HEADER,
     RETRY_AFTER_HEADER,
 )
-from spanport_server.core.errors import InvalidRequestError, RateLimitedError, SpanportError
+from spanport_server.core.errors import (
+    InvalidRequestError,
+    QueryTooExpensiveError,
+    RateLimitedError,
+    SpanportError,
+)
 from spanport_server.core.ids import new_id
 from spanport_server.core.request_body import describe_issues
 from spanport_server.core.request_context import request_id_var
@@ -117,4 +125,22 @@ def install_error_handlers(app: FastAPI) -> None:
             HTTPStatus.INTERNAL_SERVER_ERROR,
             SpanportError.code,
             "Something went wrong on the server. Try again later.",
+        )
+
+    @app.exception_handler(ClickHouseDatabaseError)
+    async def handle_clickhouse_error(
+        request: Request, error: ClickHouseDatabaseError
+    ) -> JSONResponse:
+        """A query stopped by the read limits is a 400 asking to narrow it; any other ClickHouse
+        error is unexpected (repositories already turn outages into 503s)."""
+        if error.code not in CLICKHOUSE_LIMIT_ERROR_CODES:
+            return await handle_unexpected_error(request, error)
+        logger.warning(
+            "query stopped by read limits clickhouse_code=%s method=%s path=%s",
+            error.code,
+            request.method,
+            request.url.path,
+        )
+        return problem_response(
+            QueryTooExpensiveError.status, QueryTooExpensiveError.code, QUERY_TOO_EXPENSIVE_DETAIL
         )

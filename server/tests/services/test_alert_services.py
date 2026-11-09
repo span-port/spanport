@@ -189,6 +189,7 @@ async def test_assign_emails_the_person_but_not_yourself(setup: Setup) -> None:
     sent_before = len(setup.email.sent)
 
     await setup.event_service.assign(setup.caller, alert_id, dev.id)
+    await setup.event_service.assign(setup.caller, alert_id, dev.id)
     await setup.event_service.assign(setup.caller, alert_id, me.id)
 
     (assignment,) = setup.email.sent[sent_before:]
@@ -260,6 +261,33 @@ async def test_a_failed_email_keeps_the_alert_firing(setup: Setup) -> None:
 
     (alert,) = setup.alerts.alerts.values()
     assert alert.state == AlertState.FIRING
+
+
+async def test_a_rule_that_fails_unexpectedly_does_not_stop_the_round(setup: Setup) -> None:
+    await setup.rule_service.create_rule(setup.caller, setup.rule_request(name="Broken rule"))
+    await setup.rule_service.create_rule(setup.caller, setup.rule_request())
+    setup.email.crash_on_subject = "Broken rule"
+
+    checked = await setup.check_with(matched=21)
+
+    assert checked == 1
+    assert [sent[1] for sent in setup.email.sent] == ["[Spanport] Firing: Too many errors"]
+
+
+@pytest.mark.parametrize("name", ["Errors\r\nBcc: x@evil.com", "Tab\there", "Null\x00"])
+async def test_a_rule_name_with_control_characters_is_refused(setup: Setup, name: str) -> None:
+    with pytest.raises(ValueError, match="name"):
+        setup.rule_request(name=name)
+
+
+@pytest.mark.parametrize(
+    "address", ["root,admin,x@evil.com", "Boss <b@example.com>", "a@x.com;b@y.com", "a b@x.com"]
+)
+async def test_a_recipient_that_is_not_one_plain_address_is_refused(
+    setup: Setup, address: str
+) -> None:
+    with pytest.raises(ValueError, match="email_recipients"):
+        setup.rule_request(email_recipients=[address])
 
 
 async def test_disabled_rules_are_not_checked(setup: Setup) -> None:

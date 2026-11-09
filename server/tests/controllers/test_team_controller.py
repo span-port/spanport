@@ -21,6 +21,7 @@ async def client() -> AsyncIterator[httpx.AsyncClient]:
     users = FakeUserStore()
     owner = users.add_user("owner@example.com", hash_password(PASSWORD), Role.OWNER)
     users.add_user("member@example.com", hash_password(PASSWORD), Role.MEMBER, org_id=owner.org_id)
+    users.add_user("someone@elsewhere.com", "hash", Role.OWNER)
     sessions = FakeSessionStore()
     auth = AuthService(users, sessions)
     team = TeamService(FakeTeamStore(users), sessions)
@@ -77,3 +78,20 @@ async def test_members_cannot_see_or_invite_users(client: httpx.AsyncClient) -> 
 
     assert listing.status_code == 403
     assert invite.status_code == 403
+
+
+async def test_inviting_an_account_of_another_org_does_not_confirm_it_exists(
+    client: httpx.AsyncClient,
+) -> None:
+    csrf = await sign_in(client, "owner@example.com")
+
+    elsewhere = await client.post(
+        "/api/v1/invites", json={"email": "someone@elsewhere.com", "role": "member"}, headers=csrf
+    )
+    here = await client.post(
+        "/api/v1/invites", json={"email": "member@example.com", "role": "member"}, headers=csrf
+    )
+
+    assert elsewhere.status_code == here.status_code == 409
+    assert elsewhere.json()["code"] == here.json()["code"]
+    assert elsewhere.json()["detail"] == "This email can't be invited."

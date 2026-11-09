@@ -3,7 +3,9 @@
 The caller, the body and the project are checked before the stream starts, so a bad request gets
 a normal problem+json response. The stream sends a `logs` event for each batch of new lines
 (oldest first) and a heartbeat comment when idle, so proxies keep it open. It ends when the
-client leaves. POST (read with fetch) rather than EventSource, because the filters go in a body.
+client leaves, when the caller may no longer read the project (checked every minute) or after
+SPANPORT_TAIL_MAX_MINUTES; the UI then opens a new one. POST (read with fetch) rather than
+EventSource, because the filters go in a body.
 """
 
 import time
@@ -25,10 +27,14 @@ from spanport_server.core.constants import (
     TAIL_HEARTBEAT_SECONDS,
 )
 from spanport_server.core.request_body import parse_json_body
-from spanport_server.dependencies import get_log_tail_service, require_logs_reader
+from spanport_server.dependencies import (
+    get_log_tail_service,
+    get_logs_reader_check,
+    require_logs_reader,
+)
 from spanport_server.schemas.auth import Caller
 from spanport_server.schemas.log_search import LogItem, LogTailRequest
-from spanport_server.services.log_tail_service import LogTailService
+from spanport_server.services.log_tail_service import CallerCheck, LogTailService
 
 router = APIRouter()
 
@@ -40,9 +46,11 @@ async def tail_logs(
     request: Request,
     caller: Annotated[Caller, Depends(require_logs_reader)],
     tail_service: Annotated[LogTailService, Depends(get_log_tail_service)],
+    recheck: Annotated[CallerCheck, Depends(get_logs_reader_check)],
     content_type: Annotated[str, Header()] = "",
 ) -> StreamingResponse:
-    """Stream a project's new matching logs until the client disconnects.
+    """Stream a project's new matching logs until the client disconnects, access is lost or
+    the longest allowed run is over.
 
     Returns:
         A text/event-stream response.
@@ -52,11 +60,12 @@ async def tail_logs(
         MissingScopeError / CsrfError: The key lacks logs:read, or no CSRF header (403).
         UnsupportedMediaTypeError / PayloadTooLargeError / InvalidRequestError: Bad body or query.
         NotFoundError: The project isn't in the caller's organization (404).
+        RateLimitedError: Too many requests, or the caller already runs the most tails (429).
     """
     body = await parse_json_body(request, content_type, LogTailRequest, MAX_SEARCH_BODY_BYTES)
     tail = await tail_service.open(caller, body)
     return StreamingResponse(
-        server_sent_events(tail_service.batches(tail)),
+        server_sent_events(tail_service.batches(tail, recheck)),
         media_type=SSE_CONTENT_TYPE,
         headers=STREAM_HEADERS,
     )

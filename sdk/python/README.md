@@ -14,8 +14,9 @@ spanport.init(
     # From Setup → API keys → Data keys in Spanport (shown once)
     data_key="sp_ingest_...",
     service="hr-portal-api",
-    # Defaults: http://localhost:4318 and http://localhost:8000
+    # Default: http://localhost:4318
     collector_url="https://spanport-collector.example.com",
+    # Your Spanport address (the UI's URL; it forwards /api to the server)
     server_url="https://spanport.example.com",
 )
 
@@ -25,8 +26,8 @@ logging.getLogger(__name__).error("Payment failed for order 1042")
 - **Every `logging` call is sent**, at the level your app already logs at (the root logger's level).
 - **Logs are sent in the background**, in batches every few seconds. `spanport.shutdown()` sends what is left; it also runs on normal exit.
 - **Logs inside an OpenTelemetry span** carry that span's `trace_id` and `span_id`, so they show up with the request.
-- **Wrong key?** At start-up the SDK asks the server once whether the key is valid and prints a clear error on stderr if not. Pass `check_key=False` if the app cannot reach the server.
-- **Use `https://` for anything beyond your own machine or Docker network.** The data key is sent with every batch; over plain `http://` it travels unencrypted.
+- **Wrong key?** At start-up the SDK asks `server_url` once whether the key is valid and prints a clear error on stderr if not. Set `server_url` to your Spanport address (the UI's URL, since it forwards `/api` to the server). Without it, the check goes to `http://localhost:8000` only when the collector is on localhost too; with a collector elsewhere the check is skipped (with a note on stderr), so the key is never sent to whatever happens to answer on your own machine. Pass `check_key=False` if the app cannot reach the server.
+- **Use `https://` for anything beyond your own machine or Docker network.** The data key is sent with every batch; over plain `http://` it travels unencrypted, and the SDK warns once on stderr when the collector or server is a plain `http://` address on another machine.
 - **It never breaks your app.** `init()` never raises; problems are printed on stderr as `spanport: ...` and the app carries on.
 
 Python 3.12 or newer.

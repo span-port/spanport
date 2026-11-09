@@ -111,3 +111,20 @@ async def test_lists_newest_first_in_pages_and_revokes_only_in_the_org() -> None
         await keys.revoke_in_org(caller.org_id, newest.id, caller.label)
     with pytest.raises(NotFoundError):
         await keys.revoke_in_org(new_id(), first_page.data[1].id, "user=other-org")
+
+
+async def test_a_key_made_in_the_ui_records_who_made_it() -> None:
+    keys, projects, _, caller = await setup()
+    person = Caller(org_id=caller.org_id, label="user=test", user_id=new_id())
+    project = await projects.create_project(caller, project_request())
+
+    admin_key = await keys.create_key(
+        person, CreateKeyRequest(name="ci", key_type=KeyType.ADMIN, scopes=[Scope.LOGS_READ])
+    )
+    data_key = await keys.create_key(
+        person, CreateKeyRequest(name="app", key_type=KeyType.INGEST, project_id=project.id)
+    )
+    listed = await keys.list_page(person, None, 10)
+
+    assert admin_key.record.created_by == data_key.record.created_by == person.user_id
+    assert {item.created_by for item in listed.data} == {person.user_id}

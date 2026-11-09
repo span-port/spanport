@@ -48,7 +48,8 @@ def user_response(user: UserRecord) -> CurrentUserResponse:
 def set_session_cookies(response: Response, signed_in: SignedIn) -> None:
     """Send the session cookie (HttpOnly) and the CSRF cookie (readable by the UI).
 
-    Both last until the browser closes; the server ends idle sessions on its own.
+    Both last until the browser closes; the server ends idle sessions, and sessions older than
+    SPANPORT_SESSION_MAX_HOURS, on its own.
     """
     response.set_cookie(
         SESSION_COOKIE,

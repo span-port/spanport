@@ -5,12 +5,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from spanport_server.core.ids import new_id
 from spanport_server.repositories.postgres.alert_assignee_repository import AlertAssigneeRepository
 from spanport_server.repositories.postgres.alert_event_repository import AlertEventRepository
 from spanport_server.repositories.postgres.alert_rule_repository import AlertRuleRepository
 from spanport_server.repositories.postgres.tenant_repository import TenantRepository
 from spanport_server.repositories.postgres.user_repository import UserRepository
-from spanport_server.schemas.alert import AlertRuleFields, AlertState
+from spanport_server.schemas.alert import AlertRuleFields, AlertState, AssignOutcome
 from spanport_server.schemas.auth import UserRecord
 from spanport_server.schemas.tenant import ProjectRef
 
@@ -78,7 +79,9 @@ async def test_one_open_alert_per_rule_back_to_normal_assigned_then_resolved(
     assert await alerts.mark_recovered(project.org_id, opened.id, NOW)
     assert not await alerts.mark_recovered(project.org_id, opened.id, NOW)
     still_open = await alerts.find_open(project.org_id, rule.id)
-    assert await alerts.assign(project.org_id, opened.id, owner.id)
+    assert await alerts.assign(project.org_id, opened.id, owner.id) == AssignOutcome.ASSIGNED
+    assert await alerts.assign(project.org_id, opened.id, owner.id) == AssignOutcome.UNCHANGED
+    assert await alerts.assign(project.org_id, new_id(), owner.id) == AssignOutcome.NOT_FOUND
     resolved = await alerts.resolve(project.org_id, opened.id, owner.id, NOW, "Rotated the key")
     reopened = await alerts.open_alert(project.org_id, rule.id, 25)
 

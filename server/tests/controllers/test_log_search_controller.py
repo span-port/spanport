@@ -45,8 +45,8 @@ from spanport_server.services.trace_service import TraceService
 
 pytestmark = pytest.mark.anyio
 
-NO_SCOPE_KEY = "sp_admin_no-scope-key-000000000000000000000e5f6"
-EXPIRED_KEY = "sp_admin_expired-key-0000000000000000000000g7h8"
+NO_SCOPE_KEY = "sp_admin_no-scope-key-00000000000000000000000000e5f6"
+EXPIRED_KEY = "sp_admin_expired-key-000000000000000000000000000g7h8"
 
 
 class Setup:
@@ -93,7 +93,9 @@ async def setup() -> AsyncIterator[Setup]:
         FakeUserStore(), FakeSessionStore()
     )
     app.dependency_overrides[get_log_search_service] = lambda: LogSearchService(tenants, store)
-    app.dependency_overrides[get_log_export_service] = lambda: LogExportService(tenants, store)
+    app.dependency_overrides[get_log_export_service] = lambda: LogExportService(
+        tenants, store, app.state.stream_slots
+    )
     app.dependency_overrides[get_trace_service] = lambda: TraceService(
         tenants, FakeSpanSearchStore()
     )

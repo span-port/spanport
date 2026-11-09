@@ -1,13 +1,14 @@
-"""Checks an API key on every request: prefix, known, type, not revoked, not expired, scope.
+"""Checks an API key on every request: prefix, format, known, type, revoked, expired, scope.
 
 No cache: a revoked key stops working on the next request.
 """
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import NoReturn, Protocol
 
-from spanport_server.core.constants import INVALID_KEY_DETAIL
+from spanport_server.core.constants import API_KEY_BODY_PATTERN, INVALID_KEY_DETAIL
 from spanport_server.core.errors import InvalidKeyError, MissingScopeError
 from spanport_server.core.key_hashing import hash_api_key, visible_suffix
 from spanport_server.schemas.api_key import ApiKeyRecord, KeyType, Scope, key_prefix
@@ -64,6 +65,10 @@ class ApiKeyAuthService:
             reject("missing", key_type, "")
         if not raw_key.startswith(key_prefix(key_type)):
             reject("wrong prefix", key_type, raw_key)
+        # A key that can't have been issued is refused without a database lookup, so a flood of
+        # made-up keys costs no Postgres query.
+        if not re.fullmatch(API_KEY_BODY_PATTERN, raw_key.removeprefix(key_prefix(key_type))):
+            reject("malformed", key_type, raw_key)
         record = await self._keys.find_by_hash(hash_api_key(raw_key))
         if record is None:
             reject("unknown", key_type, raw_key)

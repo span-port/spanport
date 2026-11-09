@@ -3,9 +3,14 @@ import time
 import pytest
 from fakes import SAMPLE_DATA_KEY, FakeApiKeyStore, FakeLogWriter
 from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
+from opentelemetry.proto.logs.v1.logs_pb2 import LogRecord
 from otlp_samples import make_record, make_request
 
-from spanport_server.core.errors import InvalidRequestError, StorageUnavailableError
+from spanport_server.core.errors import (
+    InvalidRequestError,
+    PayloadTooLargeError,
+    StorageUnavailableError,
+)
 from spanport_server.services.log_ingest_service import LogIngestService
 
 pytestmark = pytest.mark.anyio
@@ -77,3 +82,32 @@ async def test_logs_one_line_without_the_message_text(caplog: pytest.LogCaptureF
     assert "logs ingested" in caplog.text
     assert "records=1" in caplog.text
     assert "secret customer note" not in caplog.text
+
+
+async def test_more_than_5000_records_are_refused_before_anything_is_stored(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    key = FakeApiKeyStore().add_key(SAMPLE_DATA_KEY)
+    writer = FakeLogWriter()
+    payload = make_request(*[LogRecord() for _ in range(5_001)]).SerializeToString()
+
+    with pytest.raises(PayloadTooLargeError):
+        await LogIngestService(writer).ingest(key, payload)
+
+    assert writer.rows == []
+    assert len(caplog.records) == 1
+    assert "logs rejected" in caplog.text
+    assert "code=payload_too_large" in caplog.text
+
+
+async def test_a_value_storage_refuses_is_a_logged_bad_request(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    key = FakeApiKeyStore().add_key(SAMPLE_DATA_KEY)
+    payload = make_request(make_record()).SerializeToString()
+
+    with pytest.raises(InvalidRequestError):
+        await LogIngestService(FakeLogWriter(refuses_values=True)).ingest(key, payload)
+
+    assert "logs rejected" in caplog.text
+    assert "code=invalid_request" in caplog.text

@@ -53,9 +53,12 @@ export const SERVICE_MAP_ROUTE = "/apis/map";
 export const ERRORS_ROUTE = "/errors";
 export const DATA_ROUTE = "/data";
 export const USERS_ROUTE = "/users";
-// Open to anyone with an invite link: /accept-invite?token=...
+// Open to anyone with an invite link: /accept-invite#token=... The token is in the fragment,
+// which browsers never send, so it stays out of proxy and server access logs. Links sent
+// before that used ?token=..., which the page still reads.
 export const ACCEPT_INVITE_ROUTE = "/accept-invite";
 export const INVITE_TOKEN_PARAM = "token";
+export const URL_FRAGMENT_MARK = "#";
 export const LOGIN_ROUTE = "/login";
 export const SETUP_ROUTE = "/setup";
 export const ANY_ROUTE = "*";

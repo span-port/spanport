@@ -42,7 +42,7 @@ def gunzip_capped(compressed: bytes, max_bytes: int) -> bytes:
 
 
 def decode_otlp_body(body: bytes, content_encoding: str) -> bytes:
-    """Undo an OTLP request's Content-Encoding: none, or gzip (capped at 50 MB decompressed).
+    """Undo an OTLP request's Content-Encoding: none, or gzip (capped at 10 MB decompressed).
 
     Raises:
         UnsupportedMediaTypeError: Any other encoding.

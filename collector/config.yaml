@@ -1,21 +1,48 @@
 # OpenTelemetry Collector: receives OTLP from apps and forwards logs and traces to the server.
 # It never decides who is allowed: it passes each request's Authorization header (the data key)
 # through to the server, which checks it. Batches are kept per key so keys never mix.
+# Requests whose Authorization header can't be a data key ("Bearer sp_ingest_...") are dropped
+# before batching, so they never use a batch slot or reach the server.
+# TLS for apps sending from other machines: see config.tls.yaml.
 receivers:
   otlp:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
         include_metadata: true
+        max_recv_msg_size_mib: 10
       http:
         endpoint: 0.0.0.0:4318
         include_metadata: true
+        # 10 MiB, the same limit the server applies.
+        max_request_body_size: 10485760
 
 processors:
+  # First in every pipeline: refuses data (apps retry) before the collector runs out of memory.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
   batch:
     metadata_keys: [authorization]
+    # At most this many keys are batched at once; data for further keys is refused.
+    metadata_cardinality_limit: 200
     send_batch_size: 1000
     send_batch_max_size: 1000
+
+connectors:
+  routing/logs:
+    error_mode: ignore
+    table:
+      - context: resource
+        condition: IsMatch(otelcol.client.metadata["authorization"][0], "^Bearer sp_ingest_")
+        pipelines: [logs/forward]
+  routing/traces:
+    error_mode: ignore
+    table:
+      - context: resource
+        condition: IsMatch(otelcol.client.metadata["authorization"][0], "^Bearer sp_ingest_")
+        pipelines: [traces/forward]
 
 extensions:
   headers_setter:
@@ -38,9 +65,17 @@ service:
   pipelines:
     logs:
       receivers: [otlp]
-      processors: [batch]
+      processors: [memory_limiter]
+      exporters: [routing/logs]
+    logs/forward:
+      receivers: [routing/logs]
+      processors: [memory_limiter, batch]
       exporters: [otlphttp/server]
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [memory_limiter]
+      exporters: [routing/traces]
+    traces/forward:
+      receivers: [routing/traces]
+      processors: [memory_limiter, batch]
       exporters: [otlphttp/server]

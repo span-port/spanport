@@ -6,11 +6,12 @@ import math
 import re
 import secrets
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from spanport_server.core.constants import (
     CSRF_DETAIL,
+    DEFAULT_SESSION_MAX_HOURS,
     INVALID_INVITE_DETAIL,
     INVALID_LOGIN_DETAIL,
     INVALID_SETUP_DETAIL,
@@ -41,7 +42,7 @@ from spanport_server.core.errors import (
 )
 from spanport_server.core.ids import UuidV7
 from spanport_server.core.key_hashing import hash_api_key
-from spanport_server.core.passwords import hash_password, verify_password
+from spanport_server.core.passwords import hash_password_in_thread, verify_password_in_thread
 from spanport_server.schemas.auth import (
     LoginLimit,
     LoginRequest,
@@ -60,6 +61,10 @@ class UserStore(Protocol):
     async def count_users(self) -> int: ...
 
     async def insert_setup_token(self, token_hash: str, expires_at: datetime) -> None: ...
+
+    async def expire_setup_tokens(self, now: datetime) -> int: ...
+
+    async def setup_token_usable(self, token_hash: str, now: datetime) -> bool: ...
 
     async def create_owner(
         self,
@@ -83,11 +88,9 @@ class UserStore(Protocol):
         self, token_hash: str, now: datetime, name: str, password_hash: str
     ) -> UserRecord | None: ...
 
-    async def recent_login_failures(self, email_hash: str, since: datetime) -> list[datetime]: ...
-
-    async def record_login_failure(
-        self, email_hash: str, now: datetime, forget_before: datetime
-    ) -> None: ...
+    async def reserve_login_attempt(
+        self, email_hash: str, now: datetime, since: datetime, max_failures: int
+    ) -> list[datetime]: ...
 
     async def clear_login_failures(self, email_hash: str) -> None: ...
 
@@ -98,7 +101,7 @@ class SessionStore(Protocol):
     async def insert(self, user_id: UuidV7, token_hash: str, csrf_hash: str) -> None: ...
 
     async def touch_active(
-        self, token_hash: str, idle_since: datetime, now: datetime
+        self, token_hash: str, idle_since: datetime, created_since: datetime, now: datetime
     ) -> tuple[UuidV7, str] | None: ...
 
     async def revoke(self, token_hash: str, now: datetime) -> UuidV7 | None: ...
@@ -145,6 +148,7 @@ class AuthService:
         sessions: SessionStore,
         now: Callable[[], datetime] = utc_now,
         login_limit: LoginLimit | None = None,
+        session_max_age: timedelta = timedelta(hours=DEFAULT_SESSION_MAX_HOURS),
     ) -> None:
         """Create the service.
 
@@ -154,11 +158,14 @@ class AuthService:
             now: The clock; tests pass a fixed one.
             login_limit: The sign-in rate limit from the server's settings; the defaults
                 when None.
+            session_max_age: How long a session may last however active it is
+                (SPANPORT_SESSION_MAX_HOURS).
         """
         self._users = users
         self._sessions = sessions
         self._now = now
         self._login_limit = login_limit or LoginLimit()
+        self._session_max_age = session_max_age
 
     async def issue_setup_token(self) -> str | None:
         """Create a one-time setup token while no user exists yet.
@@ -167,14 +174,16 @@ class AuthService:
         UI's Set up page; the server never needs to know where the UI is.
 
         Returns:
-            The raw token (valid 1 hour, single use), or None when setup is already done.
+            The raw token (valid 1 hour, single use; earlier unused tokens stop working), or
+            None when setup is already done.
         """
         if await self._users.count_users():
             return None
+        now = self._now()
+        expired = await self._users.expire_setup_tokens(now)
         token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
-        await self._users.insert_setup_token(
-            hash_api_key(token), self._now() + SETUP_TOKEN_LIFETIME
-        )
+        await self._users.insert_setup_token(hash_api_key(token), now + SETUP_TOKEN_LIFETIME)
+        logger.info("setup token issued older_tokens_expired=%d", expired)
         return token
 
     async def complete_setup(self, request: SetupRequest) -> SignedIn:
@@ -188,13 +197,19 @@ class AuthService:
         org_slug = org_slug_for(request.organization)
         if await self._users.count_users():
             raise SetupLinkError(SETUP_DONE_DETAIL)
+        token_hash, now = hash_api_key(request.token), self._now()
+        # Checked before the slow password hash, so made-up tokens cost the server nothing.
+        if not await self._users.setup_token_usable(token_hash, now):
+            logger.warning("setup rejected: link wrong, used or expired")
+            raise SetupLinkError(INVALID_SETUP_DETAIL)
+        password_hash = await hash_password_in_thread(request.password)
         owner = await self._users.create_owner(
-            hash_api_key(request.token),
-            self._now(),
+            token_hash,
+            now,
             org_slug,
             request.name.strip(),
             normalize_email(request.email),
-            hash_password(request.password),
+            password_hash,
         )
         if owner is None:
             logger.warning("setup rejected: link wrong, used or expired")
@@ -221,12 +236,13 @@ class AuthService:
             InviteLinkError: The link can't be used, or the email got an account meanwhile.
         """
         check_password_strength(request.password)
-        user = await self._users.accept_invite(
-            hash_api_key(request.token),
-            self._now(),
-            request.name.strip(),
-            hash_password(request.password),
-        )
+        token_hash, now = hash_api_key(request.token), self._now()
+        # Checked before the slow password hash, so made-up links cost the server nothing.
+        if await self._users.find_open_invite(token_hash, now) is None:
+            logger.warning("invite rejected: link wrong, used, cancelled or expired")
+            raise InviteLinkError(INVALID_INVITE_DETAIL)
+        password_hash = await hash_password_in_thread(request.password)
+        user = await self._users.accept_invite(token_hash, now, request.name.strip(), password_hash)
         if user is None:
             logger.warning("invite rejected: link wrong, used, cancelled or expired")
             raise InviteLinkError(INVALID_INVITE_DETAIL)
@@ -246,22 +262,25 @@ class AuthService:
             InvalidLoginError: Unknown email, disabled user or wrong password (never says which).
         """
         email_hash = hash_api_key(normalize_email(request.email))
-        now = self._now()
-        await self._check_login_limit(email_hash, now)
+        await self._reserve_login_attempt(email_hash)
         found = await self._users.find_for_login(normalize_email(request.email))
         user, password_hash = found if found else (None, None)
-        if user is None or not verify_password(password_hash, request.password):
-            await self._users.record_login_failure(email_hash, now, now - self._login_limit.window)
+        if user is None or not await verify_password_in_thread(password_hash, request.password):
+            # The attempt was stored as a failure up front, so there is nothing more to record.
             logger.info("sign-in rejected: wrong email or password")
             raise InvalidLoginError(INVALID_LOGIN_DETAIL)
         await self._users.clear_login_failures(email_hash)
         logger.info("signed in user=%s org=%s role=%s", user.id, user.org_slug, user.role)
         return await self._start_session(user)
 
-    async def _check_login_limit(self, email_hash: str, now: datetime) -> None:
-        """Refuse sign-in while this email has too many recent wrong passwords."""
-        limit = self._login_limit
-        failures = await self._users.recent_login_failures(email_hash, now - limit.window)
+    async def _reserve_login_attempt(self, email_hash: str) -> None:
+        """Count this attempt as a failure until it succeeds, or refuse it while this email has
+        too many recent wrong passwords.
+        """
+        limit, now = self._login_limit, self._now()
+        failures = await self._users.reserve_login_attempt(
+            email_hash, now, now - limit.window, limit.failures
+        )
         if len(failures) < limit.failures:
             return
         # The lock lifts once the oldest of the last `limit.failures` failures leaves the window.
@@ -282,15 +301,18 @@ class AuthService:
             needs_csrf: True for requests that may change something (anything but GET).
 
         Raises:
-            NotSignedInError: No cookie, or the session is revoked, idle too long or its user
-                was disabled.
+            NotSignedInError: No cookie, or the session is revoked, idle too long, older than
+                the maximum session age or its user was disabled.
             CsrfError: The request needs a CSRF token and its header doesn't match the session.
         """
         if not session_token:
             raise NotSignedInError(NOT_SIGNED_IN_DETAIL)
         now = self._now()
         active = await self._sessions.touch_active(
-            hash_api_key(session_token), now - SESSION_IDLE_TIMEOUT, now
+            hash_api_key(session_token),
+            now - SESSION_IDLE_TIMEOUT,
+            now - self._session_max_age,
+            now,
         )
         user = await self._users.find_by_id(active[0]) if active else None
         if active is None or user is None:
@@ -305,16 +327,19 @@ class AuthService:
         logger.info("signed out user=%s", user_id)
 
     async def reset_password(self, email: str, password: str) -> None:
-        """Set a new password and sign the user out everywhere (the CLI recovery command).
+        """Set a new password, sign the user out everywhere and lift any sign-in lock on the
+        email (the CLI recovery command).
 
         Raises:
             InvalidRequestError: The password is too short.
             NotFoundError: No user has this email.
         """
         check_password_strength(password)
-        user_id = await self._users.set_password(normalize_email(email), hash_password(password))
+        email = normalize_email(email)
+        user_id = await self._users.set_password(email, await hash_password_in_thread(password))
         if user_id is None:
             raise NotFoundError(UNKNOWN_USER_DETAIL)
+        await self._users.clear_login_failures(hash_api_key(email))
         revoked = await self._sessions.revoke_for_user(user_id, self._now())
         logger.info("password reset user=%s sessions_revoked=%d", user_id, revoked)
 

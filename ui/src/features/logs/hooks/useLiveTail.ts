@@ -1,8 +1,6 @@
 // Live tail: one stream per filter set, reconnecting with backoff and paused while the tab is hidden.
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 
-import { ApiError } from "../../../api/client";
-import { FIRST_SERVER_ERROR_STATUS } from "../../../constants/api";
 import {
   SSE_LOGS_EVENT,
   TAIL_FLUSH_MS,
@@ -12,6 +10,7 @@ import {
   TAIL_RETRY_MAX_MS,
 } from "../../../constants/logs";
 import { usePageVisible } from "../../../hooks/usePageVisible";
+import { stopsLiveTail } from "../../../lib/liveTail";
 import { readEvents } from "../../../lib/serverSentEvents";
 import { mergeTailRows } from "../../../lib/tailRows";
 import { openLogTail } from "../api";
@@ -59,8 +58,10 @@ export function useLiveTail(request: LogTailRequest | null): LiveTail {
 /**
  * Open the stream and keep it open until the returned cleanup runs.
  *
- * Arriving rows are buffered and flushed to state every 250 ms. A dropped stream or a 5xx
- * reconnects with growing waits; a 4xx (bad query, foreign project) stops and shows the error.
+ * Arriving rows are buffered and flushed to state every 250 ms. A stream the server ends (it
+ * closes each tail after its longest run) reconnects after the first short wait; a dropped
+ * stream, a 5xx or a 429 reconnects with growing waits; any other 4xx (bad query, foreign
+ * project, signed out) stops and shows the error.
  */
 function startTail(
   requestKey: string,
@@ -104,7 +105,7 @@ function startTail(
       }
     } catch (error) {
       if (controller.signal.aborted) return;
-      if (error instanceof ApiError && error.status < FIRST_SERVER_ERROR_STATUS) {
+      if (stopsLiveTail(error)) {
         update({ status: "stopped", error });
         return;
       }

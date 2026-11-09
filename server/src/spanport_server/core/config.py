@@ -12,23 +12,54 @@ from spanport_server.core.constants import (
     ALERT_WINDOW_CEILING_MINUTES,
     DEFAULT_ALERT_CHECK_SECONDS,
     DEFAULT_ALERT_MAX_EMAILS,
+    DEFAULT_ALERT_MAX_EMAILS_PER_HOUR,
     DEFAULT_ALERT_MAX_RULES_PER_PROJECT,
     DEFAULT_ALERT_MAX_WINDOW_MINUTES,
+    DEFAULT_ALERT_TESTS_PER_DAY,
+    DEFAULT_CLICKHOUSE_MAX_EXECUTION_SECONDS,
+    DEFAULT_CLICKHOUSE_MAX_MEMORY_BYTES,
     DEFAULT_LOG_LEVEL,
     DEFAULT_LOGIN_FAILURE_LIMIT,
     DEFAULT_LOGIN_FAILURE_WINDOW_MINUTES,
+    DEFAULT_MAX_EXPORTS_PER_CALLER,
+    DEFAULT_MAX_TAILS_PER_CALLER,
+    DEFAULT_RATE_LIMIT_EXPENSIVE_PER_MINUTE,
+    DEFAULT_RATE_LIMIT_PER_MINUTE,
+    DEFAULT_RATE_LIMIT_PUBLIC_PER_MINUTE,
+    DEFAULT_SESSION_MAX_HOURS,
     DEFAULT_SMTP_PORT,
+    DEFAULT_TAIL_MAX_MINUTES,
+    ENV_EXAMPLE_PLACEHOLDER_DETAIL,
     ENV_PREFIX,
     MAX_ALERT_CHECK_SECONDS,
+    MAX_ALERT_EMAILS_PER_HOUR,
+    MAX_ALERT_TESTS_PER_DAY,
+    MAX_CLICKHOUSE_MAX_EXECUTION_SECONDS,
     MAX_LOGIN_FAILURE_LIMIT,
     MAX_LOGIN_FAILURE_WINDOW_MINUTES,
+    MAX_RATE_LIMIT_PER_MINUTE,
+    MAX_SESSION_MAX_HOURS,
+    MAX_STREAMS_PER_CALLER,
+    MAX_TAIL_MAX_MINUTES,
     MIN_ALERT_CHECK_SECONDS,
+    MIN_CLICKHOUSE_MAX_MEMORY_BYTES,
+    PLACEHOLDER_PASSWORD,
     UI_URL_DETAIL,
     UI_URL_SCHEMES,
 )
 
 LogLevelSetting = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 Port = Annotated[int, Field(ge=1, le=65535)]
+
+
+class ApiDocsSettings(BaseSettings):
+    """Read when the app is built, before the other settings: whether /docs, /redoc and
+    /openapi.json are served (off by default, so a public server doesn't list its API).
+    """
+
+    model_config = SettingsConfigDict(env_prefix=ENV_PREFIX)
+
+    api_docs: bool = False
 
 
 class DatabaseSettings(BaseSettings):
@@ -49,6 +80,21 @@ class DatabaseSettings(BaseSettings):
     clickhouse_user: str
     clickhouse_password: SecretStr
     clickhouse_db: str
+    # Limits on each read query; a query over them is stopped and the caller told to narrow it.
+    clickhouse_max_execution_seconds: int = Field(
+        DEFAULT_CLICKHOUSE_MAX_EXECUTION_SECONDS, ge=1, le=MAX_CLICKHOUSE_MAX_EXECUTION_SECONDS
+    )
+    clickhouse_max_memory_bytes: int = Field(
+        DEFAULT_CLICKHOUSE_MAX_MEMORY_BYTES, ge=MIN_CLICKHOUSE_MAX_MEMORY_BYTES
+    )
+
+    @field_validator("postgres_password", "clickhouse_password")
+    @classmethod
+    def check_not_placeholder(cls, password: SecretStr) -> SecretStr:
+        """Refuse the placeholder password from .env.example, so no install runs with it."""
+        if password.get_secret_value() == PLACEHOLDER_PASSWORD:
+            raise ValueError(ENV_EXAMPLE_PLACEHOLDER_DETAIL)
+        return password
 
 
 class Settings(DatabaseSettings):
@@ -86,6 +132,37 @@ class Settings(DatabaseSettings):
     login_failure_limit: int = Field(DEFAULT_LOGIN_FAILURE_LIMIT, ge=1, le=MAX_LOGIN_FAILURE_LIMIT)
     login_failure_window_minutes: int = Field(
         DEFAULT_LOGIN_FAILURE_WINDOW_MINUTES, ge=1, le=MAX_LOGIN_FAILURE_WINDOW_MINUTES
+    )
+    # However active, a session ends this many hours after sign-in.
+    session_max_hours: int = Field(DEFAULT_SESSION_MAX_HOURS, ge=1, le=MAX_SESSION_MAX_HOURS)
+
+    # Requests per minute on /api/v1: per signed-in person or admin key, a lower limit on the
+    # routes that run large queries, and per client address on the routes open without signing in.
+    rate_limit_per_minute: int = Field(
+        DEFAULT_RATE_LIMIT_PER_MINUTE, ge=1, le=MAX_RATE_LIMIT_PER_MINUTE
+    )
+    rate_limit_expensive_per_minute: int = Field(
+        DEFAULT_RATE_LIMIT_EXPENSIVE_PER_MINUTE, ge=1, le=MAX_RATE_LIMIT_PER_MINUTE
+    )
+    rate_limit_public_per_minute: int = Field(
+        DEFAULT_RATE_LIMIT_PUBLIC_PER_MINUTE, ge=1, le=MAX_RATE_LIMIT_PER_MINUTE
+    )
+    # Test emails of alert rules per person per day (and always at most one a minute per rule).
+    rate_limit_alert_tests_per_day: int = Field(
+        DEFAULT_ALERT_TESTS_PER_DAY, ge=1, le=MAX_ALERT_TESTS_PER_DAY
+    )
+    # Live tails and exports one caller may run at once.
+    rate_limit_concurrent_tails: int = Field(
+        DEFAULT_MAX_TAILS_PER_CALLER, ge=1, le=MAX_STREAMS_PER_CALLER
+    )
+    rate_limit_concurrent_exports: int = Field(
+        DEFAULT_MAX_EXPORTS_PER_CALLER, ge=1, le=MAX_STREAMS_PER_CALLER
+    )
+    # A live tail ends after this long; the UI opens a new one.
+    tail_max_minutes: int = Field(DEFAULT_TAIL_MAX_MINUTES, ge=1, le=MAX_TAIL_MAX_MINUTES)
+    # Alert emails per organization per hour; over it, emails are skipped (alerts still open).
+    alert_max_emails_per_hour: int = Field(
+        DEFAULT_ALERT_MAX_EMAILS_PER_HOUR, ge=1, le=MAX_ALERT_EMAILS_PER_HOUR
     )
 
     @model_validator(mode="after")

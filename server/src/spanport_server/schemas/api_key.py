@@ -57,6 +57,8 @@ class ApiKeyRecord:
     revoked_at: datetime | None
     # Keys made with the CLI before names existed have none.
     name: str | None = None
+    # The signed-in user who created the key; None for CLI keys and removed users.
+    created_by: UuidV7 | None = None
 
 
 class CurrentApiKeyResponse(BaseModel):
@@ -107,6 +109,7 @@ class ApiKeyItem(BaseModel):
     created_at: datetime
     expires_at: datetime | None
     revoked_at: datetime | None
+    created_by: UuidV7 | None
 
 
 def key_item(record: ApiKeyRecord) -> ApiKeyItem:
@@ -122,6 +125,7 @@ def key_item(record: ApiKeyRecord) -> ApiKeyItem:
         created_at=record.created_at,
         expires_at=record.expires_at,
         revoked_at=record.revoked_at,
+        created_by=record.created_by,
     )
 
 

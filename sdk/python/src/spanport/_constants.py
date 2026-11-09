@@ -25,6 +25,10 @@ CURRENT_API_KEY_PATH = "/api/v1/api-keys/current"
 AUTHORIZATION_HEADER = "Authorization"
 BEARER_PREFIX = "Bearer "
 ALLOWED_URL_SCHEMES = ("http", "https")
+PLAIN_HTTP_SCHEME = "http"
+# Host names of this machine. Over plain http the data key is only safe to these, and the
+# default server URL (localhost) is only used when the collector is local too.
+LOCAL_HOSTNAMES = ("localhost", "127.0.0.1", "::1")
 KEY_CHECK_TIMEOUT_SECONDS = 5
 KEY_CHECK_THREAD_NAME = "spanport-key-check"
 VISIBLE_KEY_SUFFIX_LENGTH = 4

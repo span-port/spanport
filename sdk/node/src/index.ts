@@ -18,10 +18,10 @@ import {
   CONSOLE_SOURCE,
   DATA_KEY_PREFIX,
   DEFAULT_COLLECTOR_URL,
-  DEFAULT_SERVER_URL,
   LOG_STREAM_SOURCE,
   SDK_SCOPE_NAME,
 } from "./constants.js";
+import { keyCheckUrl, warnPlainHttp } from "./endpoints.js";
 import { checkDataKey } from "./keyCheck.js";
 import { createLogStream } from "./logStream.js";
 import { buildLoggerProvider, buildOtlpExporter, toLogRecord } from "./pipeline.js";
@@ -37,7 +37,11 @@ export interface SpanportOptions {
   service: string;
   /** The Spanport OTel Collector (OTLP/HTTP). Default http://localhost:4318. */
   collectorUrl?: string;
-  /** The Spanport server, asked once whether the data key is valid. Default http://localhost:8000. */
+  /**
+   * Where the data key is checked once at start-up: your Spanport address (the UI's URL; it
+   * forwards /api to the server). Without it the check uses http://localhost:8000 only when the
+   * collector is on localhost too, and is skipped otherwise.
+   */
   serverUrl?: string;
   /** Set false to skip the start-up key check (e.g. no route to the server). Default true. */
   checkKey?: boolean;
@@ -130,7 +134,9 @@ function start(options: SpanportOptions): void {
             ),
           );
         });
-  const serverUrl = options.serverUrl ?? DEFAULT_SERVER_URL;
+  const checkUrl = options.checkKey === false ? undefined : keyCheckUrl(collectorUrl, options.serverUrl);
+  // The SDK's own calls to this host are never traced.
+  const serverUrl = options.serverUrl ?? checkUrl ?? collectorUrl;
   const tracing =
     options.traces === false
       ? undefined
@@ -141,8 +147,9 @@ function start(options: SpanportOptions): void {
   active = { provider, logger, restoreConsole, tracing };
   installExitFlush();
   sdkInfo(`sending logs${tracing ? " and traces" : ""} for service ${options.service} to ${collectorUrl}`);
-  if (options.checkKey !== false) {
-    void checkDataKey(serverUrl, options.dataKey);
+  warnPlainHttp(checkUrl === undefined ? [collectorUrl] : [collectorUrl, checkUrl]);
+  if (checkUrl !== undefined) {
+    void checkDataKey(checkUrl, options.dataKey);
   }
 }
 

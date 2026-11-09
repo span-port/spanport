@@ -17,6 +17,12 @@ export const CURRENT_API_KEY_PATH = "/api/v1/api-keys/current";
 export const AUTHORIZATION_HEADER = "Authorization";
 export const BEARER_PREFIX = "Bearer ";
 export const ALLOWED_URL_PROTOCOLS: readonly string[] = ["http:", "https:"];
+export const PLAIN_HTTP_PROTOCOL = "http:";
+/**
+ * Host names of this machine, as `URL.hostname` writes them. Over plain http the data key is only
+ * safe to these, and the default server URL (localhost) is only used when the collector is local.
+ */
+export const LOCAL_HOSTNAMES: readonly string[] = ["localhost", "127.0.0.1", "[::1]"];
 export const KEY_CHECK_TIMEOUT_MS = 5000;
 export const VISIBLE_KEY_SUFFIX_LENGTH = 4;
 export const HTTP_UNAUTHORIZED = 401;
@@ -50,3 +56,5 @@ export const TIME_FIELDS: readonly string[] = ["time", "timestamp"];
 export const TRACE_ID_FIELD = "trace_id";
 export const SPAN_ID_FIELD = "span_id";
 export const LINE_SEPARATOR = "\n";
+/** Longest unfinished line logStream() keeps waiting for its newline (characters, about 1 MB). */
+export const MAX_PARTIAL_LINE_LENGTH = 1024 * 1024;

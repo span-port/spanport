@@ -10,6 +10,7 @@ from spanport_server.core.constants import (
     CSV_COLUMNS,
     CSV_FORMULA_GUARD,
     CSV_FORMULA_PREFIXES,
+    CSV_LEADING_SPACE,
     LOG_FIELD_ALIASES,
 )
 from spanport_server.schemas.log_search import ExportFormat, LogItem
@@ -19,8 +20,13 @@ USER_ID_ATTRIBUTE = LOG_FIELD_ALIASES["user"]
 
 
 def safe_cell(value: str) -> str:
-    """A CSV cell that Excel or Sheets won't run as a formula (e.g. "=HYPERLINK(...)")."""
-    return CSV_FORMULA_GUARD + value if value.startswith(CSV_FORMULA_PREFIXES) else value
+    """A CSV cell that Excel or Sheets won't run as a formula (e.g. "=HYPERLINK(...)").
+
+    Spreadsheets skip leading spaces before deciding, so " =1+1" is guarded too.
+    """
+    if value.lstrip(CSV_LEADING_SPACE).startswith(CSV_FORMULA_PREFIXES):
+        return CSV_FORMULA_GUARD + value
+    return value
 
 
 def csv_line(cells: list[str]) -> str:

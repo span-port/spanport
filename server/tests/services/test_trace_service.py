@@ -1,12 +1,21 @@
-from datetime import UTC, datetime, timedelta
+import base64
+import json
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from fakes import FakeSpanSearchStore, FakeTenantStore
+from pydantic import ValidationError
 
 from spanport_server.core.errors import InvalidRequestError, NotFoundError
 from spanport_server.schemas.auth import Caller
 from spanport_server.schemas.tenant import ProjectRef
-from spanport_server.schemas.trace import RequestItem, StoredSpan, TraceSearchRequest
+from spanport_server.schemas.trace import (
+    RequestItem,
+    SpanPosition,
+    StoredSpan,
+    TraceSearchRequest,
+)
+from spanport_server.services.trace_cursor import decode_trace_cursor, encode_trace_cursor
 from spanport_server.services.trace_service import TraceService
 
 pytestmark = pytest.mark.anyio
@@ -120,3 +129,41 @@ async def test_a_trace_opens_as_a_waterfall_or_is_not_found(setup: Setup) -> Non
         await setup.service.get_trace(setup.caller, setup.project.project_id, "f" * 32)
     with pytest.raises(InvalidRequestError, match="32 hexadecimal"):
         await setup.service.get_trace(setup.caller, setup.project.project_id, "nope")
+
+
+async def test_a_range_may_not_end_far_ahead_or_outside_the_calendar(setup: Setup) -> None:
+    far_ahead = NOW + timedelta(hours=2)
+    year_9999 = datetime(9999, 12, 31, 23, tzinfo=timezone(timedelta(hours=-5)))
+
+    with pytest.raises(InvalidRequestError, match="end: must be at most 1 hour from now"):
+        await setup.service.search(setup.caller, setup.search(end=far_ahead))
+    with pytest.raises(InvalidRequestError, match="out of range"):
+        await setup.service.search(setup.caller, setup.search(end=year_9999))
+
+
+async def test_a_cursor_from_another_time_range_is_refused(setup: Setup) -> None:
+    old_position = SpanPosition(ts=NOW - timedelta(days=2), span_id="00000000000000aa")
+
+    with pytest.raises(InvalidRequestError, match="cursor is not valid"):
+        await setup.service.search(
+            setup.caller, setup.search(cursor=encode_trace_cursor(old_position))
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [[], {"ts": NOW.isoformat(), "span_id": 7}, {"ts": NOW.isoformat()}],
+    ids=["not-an-object", "number-span-id", "missing-span-id"],
+)
+def test_a_made_up_trace_cursor_is_refused(payload: object) -> None:
+    cursor = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+
+    with pytest.raises(InvalidRequestError, match="cursor is not valid"):
+        decode_trace_cursor(cursor, NOW - timedelta(hours=1), NOW)
+
+
+async def test_request_numbers_and_cursors_have_upper_bounds(setup: Setup) -> None:
+    with pytest.raises(ValidationError, match="min_duration_ms"):
+        setup.search(min_duration_ms=24 * 60 * 60 * 1000 + 1)
+    with pytest.raises(ValidationError, match="cursor"):
+        setup.search(cursor="a" * 257)

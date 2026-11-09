@@ -30,18 +30,19 @@ class SessionRepository:
             )
 
     async def touch_active(
-        self, token_hash: str, idle_since: datetime, now: datetime
+        self, token_hash: str, idle_since: datetime, created_since: datetime, now: datetime
     ) -> tuple[UuidV7, str] | None:
         """Mark a live session as seen now.
 
         Args:
             token_hash: Hash of the session id from the cookie.
             idle_since: Sessions last seen before this have timed out.
+            created_since: Sessions started before this have reached their maximum age.
             now: The current time.
 
         Returns:
             The session's user id and CSRF token hash, or None when the session is unknown,
-            revoked or timed out.
+            revoked, idle too long or too old.
         """
         async with self._sessionmaker.begin() as session:
             row = (
@@ -51,6 +52,7 @@ class SessionRepository:
                         UserSession.token_hash == token_hash,
                         UserSession.revoked_at.is_(None),
                         UserSession.last_seen_at >= idle_since,
+                        UserSession.created_at >= created_since,
                     )
                     .values(last_seen_at=now)
                     .returning(UserSession.user_id, UserSession.csrf_hash)

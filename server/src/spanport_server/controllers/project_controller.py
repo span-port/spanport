@@ -11,6 +11,7 @@ from spanport_server.core.constants import (
     ARCHIVE_PROJECT_PATH,
     DEFAULT_PROJECTS_LIMIT,
     MAX_AUTH_BODY_BYTES,
+    MAX_CURSOR_LENGTH,
     MAX_PROJECTS_LIMIT,
     PROJECT_PATH,
     PROJECTS_PATH,
@@ -40,7 +41,7 @@ async def list_projects(
     caller: Annotated[Caller, Depends(require_projects_reader)],
     project_service: Annotated[ProjectService, Depends(get_project_service)],
     limit: Annotated[int, Query(ge=1, le=MAX_PROJECTS_LIMIT)] = DEFAULT_PROJECTS_LIMIT,
-    cursor: Annotated[str | None, Query()] = None,
+    cursor: Annotated[str | None, Query(max_length=MAX_CURSOR_LENGTH)] = None,
 ) -> ProjectListResponse:
     """One page of projects, each with its client and environment.
 

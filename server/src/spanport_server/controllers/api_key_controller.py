@@ -16,6 +16,7 @@ from spanport_server.core.constants import (
     CURRENT_API_KEY_PATH,
     DEFAULT_KEYS_LIMIT,
     MAX_AUTH_BODY_BYTES,
+    MAX_CURSOR_LENGTH,
     MAX_KEYS_LIMIT,
     REVOKE_API_KEY_PATH,
 )
@@ -63,7 +64,7 @@ async def list_keys(
     caller: Annotated[Caller, Depends(require_manager)],
     key_service: Annotated[ApiKeyService, Depends(get_api_key_service)],
     limit: Annotated[int, Query(ge=1, le=MAX_KEYS_LIMIT)] = DEFAULT_KEYS_LIMIT,
-    cursor: Annotated[str | None, Query()] = None,
+    cursor: Annotated[str | None, Query(max_length=MAX_CURSOR_LENGTH)] = None,
 ) -> ApiKeyListResponse:
     """One page of the organization's keys, newest first. Never includes a key or its hash.
 

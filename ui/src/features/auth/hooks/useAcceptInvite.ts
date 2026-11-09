@@ -1,8 +1,9 @@
 // Accepting an invite: show who it is for, then create the account with a name and password.
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
-import { useSearchParams } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import * as zod from "zod";
 
 import { INVITE_DETAILS_QUERY_KEY } from "../../../constants/api";
@@ -13,8 +14,9 @@ import {
   NAME_MESSAGE,
   WEAK_PASSWORD_MESSAGE,
 } from "../../../constants/auth";
-import { INVITE_TOKEN_PARAM } from "../../../constants/ui";
+import { ACCEPT_INVITE_ROUTE } from "../../../constants/ui";
 import { passwordStrength, strengthFill, strengthMessage } from "../../../lib/passwordStrength";
+import { inviteTokenFrom } from "../../../lib/team";
 import { acceptInvite, inspectInvite } from "../api";
 import { useSignedIn } from "./useSignedIn";
 
@@ -25,14 +27,31 @@ const acceptSchema = zod.object({
 type AcceptValues = zod.infer<typeof acceptSchema>;
 
 /**
- * The invite in the URL (`?token=`) and the form that accepts it.
+ * The invite token from the link, kept in state; the address bar is then cleared of it so it
+ * isn't left in history or shared by copying the address.
+ *
+ * @returns The token, or null when the link has none.
+ */
+function useInviteToken(): string | null {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [token] = useState(() => inviteTokenFrom(location.hash, location.search));
+  const linkHasToken = inviteTokenFrom(location.hash, location.search) !== null;
+  useEffect(() => {
+    if (linkHasToken) void navigate(ACCEPT_INVITE_ROUTE, { replace: true });
+  }, [linkHasToken, navigate]);
+  return token;
+}
+
+/**
+ * The invite in the URL (`#token=`, or `?token=` from older links) and the form that
+ * accepts it.
  *
  * @returns `token` (null when the link is incomplete), the invite's details or error, and the
  *   form: `register`, `submit`, the password meter, the first field problem, the server's error.
  */
 export function useAcceptInvite() {
-  const [params] = useSearchParams();
-  const token = params.get(INVITE_TOKEN_PARAM);
+  const token = useInviteToken();
   const signedIn = useSignedIn();
   const details = useQuery({
     queryKey: [INVITE_DETAILS_QUERY_KEY, token],
